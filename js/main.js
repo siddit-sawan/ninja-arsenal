@@ -5,7 +5,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { sdk, initSDK, loadingStart, loadingStop, happytime, gameplay, loadData, saveData, clearData, adsOK, runAd } from './sdk.js';
 import { audio, sfx, music } from './audio.js';
-import { CAP } from './slicer.js';
+import { CAP, batchParts } from './slicer.js';
+import { loadBody, cloneChar, RIG, cutMarks, MARK_MAT } from './body.js';
 import { makePhysics } from './ragdoll.js';
 import { buildEnemy, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, sickle } from './models.js';
 import { buildWorld, THEMES, ARENA_R } from './world.js';
@@ -90,16 +91,36 @@ function setupRenderer() {
   camera.rotation.order = 'YXZ';
   scene.add(camera);
 }
+// Dynamic resolution: drop render scale when frames run slow, raise it again once there is headroom.
+const dynRes = { scale: 1, acc: 0, n: 0, cool: 0 };
+function basePR() { return Math.min(devicePixelRatio || 1, quality === 'high' ? 1.5 : 1); }
+function setRenderScale(sc) {
+  dynRes.scale = sc;
+  renderer.setPixelRatio(basePR() * sc);
+  renderer.setSize(vw, vh, false);
+  if (composer) composer.setSize(vw, vh);
+}
+function tuneRes(rdt) {
+  if (document.hidden || rdt <= 0 || rdt >= 0.05) return;   // ignore tab switches and hitches
+  dynRes.acc += rdt; dynRes.n++;
+  if (dynRes.acc < 1) return;
+  const avg = dynRes.acc / dynRes.n; dynRes.acc = dynRes.n = 0;
+  if (dynRes.cool > 0) { dynRes.cool--; return; }
+  const minS = 0.65;
+  if (avg > 1 / 50 && dynRes.scale > minS) { setRenderScale(Math.max(minS, dynRes.scale - 0.15)); dynRes.cool = 1; }
+  else if (avg < 1 / 58 && dynRes.scale < 1) { setRenderScale(Math.min(1, dynRes.scale + 0.1)); dynRes.cool = 3; }
+}
 function applyQuality() {
   const hi = quality === 'high';
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, hi ? 2 : 1));
+  dynRes.scale = 1;
+  renderer.setPixelRatio(basePR());
   if (world) {
     const s = hi ? 2048 : 1024; world.sun.shadow.mapSize.set(s, s);
     if (world.sun.shadow.map) { world.sun.shadow.map.dispose(); world.sun.shadow.map = null; }
   }
   if (composer) { composer.dispose(); composer = null; }
   if (hi) {
-    const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
+    const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 2 });
     composer = new EffectComposer(renderer, rt);
     composer.addPass(new RenderPass(scene, camera));
     bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.14, 0.4, 0.97);
@@ -155,7 +176,7 @@ function startSwing(dx, dy, dur = 0.16) {
 const _vq = new THREE.Quaternion(), _vp = new V3(), _vb = new V3();
 const inGame = () => ['play', 'clearing', 'gameover', 'paused'].includes(state);
 function updateVM(dt, t) {
-  vm.visible = vmMode === 'display' || (save.cam === 'fp' && inGame());
+  vm.visible = vmMode === 'display' || (save.cam === 'fp' && inGame() && cineW < 0.35);
   let id = vmMode === 'display' ? displayId : cur;
   showVM(id);
   vmArm.visible = vmMode !== 'display' && WEAP[id].mode !== 'throw';
@@ -216,7 +237,7 @@ function makeStage(n) {
 const templates = {};
 function spawnEnemy(kind, x, z, minion = false, gate = null) {
   const d = EDEF[kind];
-  const root = templates[kind].clone(true);
+  const root = cloneChar(templates[kind]);
   const P = {}; ['hips', 'torso', 'head', 'armL', 'armR', 'elbowL', 'elbowR', 'legL', 'legR', 'kneeL', 'kneeR'].forEach(n => P[n] = root.getObjectByName(n));
   root.traverse(o => { if (o.isMesh) o.castShadow = true; });
   const e = { kind, d, root, P, hp: d.hp, maxHp: d.hp, x, z, speed: d.speed * stage.speedMul * rnd(0.9, 1.1), state: 'run', t: 0, ph: rnd(0, 6), atkT: 0,
@@ -239,7 +260,7 @@ function animEnemy(e, dt) {
   e.t += dt;
   if (e.air) {           // tucked flip around the hips
     const t = e.air.t, f = Math.sin(Math.PI * t);
-    P.hips.rotation.x = e.air.spins * Math.PI * 2 * smooth(t); P.hips.position.y = 0.95;
+    P.hips.rotation.x = e.air.spins * Math.PI * 2 * smooth(t); P.hips.position.y = RIG.hips.y;
     P.legL.rotation.x = P.legR.rotation.x = -1.4 * f; P.kneeL.rotation.x = P.kneeR.rotation.x = 2.1 * f;
     P.armL.rotation.x = -0.9 * f; P.armR.rotation.x = -0.9 * f - 0.3; P.elbowL.rotation.x = P.elbowR.rotation.x = -1.2 * f;
     P.head.rotation.x = 0.3 * f;
@@ -257,13 +278,13 @@ function animEnemy(e, dt) {
     P.armL.rotation.x = s * 0.8; rotTo(P.armR, e.kind === 'runner' ? -s * 0.8 : -0.45 - s * 0.25, k);
     P.elbowL.rotation.x = -0.9; P.elbowR.rotation.x = -1.0;
     P.hips.rotation.x = e.kind === 'runner' ? 0.45 : 0.25;
-    P.hips.position.y = 0.95 + Math.abs(c) * 0.06;
+    P.hips.position.y = RIG.hips.y + Math.abs(c) * 0.06;
     P.head.rotation.x = -P.hips.rotation.x * 0.6;
     return;
   }
   // standing poses
   rotTo(P.legL, -0.25, k); rotTo(P.legR, 0.3, k); rotTo(P.kneeL, 0.35, k); rotTo(P.kneeR, 0.2, k); rotTo(P.hips, 0.12, k);
-  P.hips.position.y += (0.92 - P.hips.position.y) * k;
+  P.hips.position.y += (RIG.hips.y - 0.03 - P.hips.position.y) * k;
   P.head.rotation.x = -0.05;
   rotTo(P.armL, -0.4, k); rotTo(P.elbowL, -1.0, k);
   if (e.state === 'windup') { const f = Math.min(1, e.t / e.windDur); rotTo(P.armR, -2.9 * f - 0.4 * (1 - f), k); rotTo(P.elbowR, -0.4, k); rotTo(P.hips, -0.1, k); }
@@ -278,6 +299,8 @@ function updEnemies(dt) {
   for (const e of enemies.slice()) {
     const d = e.d;
     if (d.dummy) { e.root.position.set(e.x, 0, e.z); continue; }   // training dummies just stand there
+    if (e.stormed) { updStormed(e); continue; }
+    if (e.downed) { updDowned(e, dt, px, pz); continue; }
     e.leapCD -= dt;
     if (e.air) {
       const A = e.air; A.t = Math.min(1, A.t + dt / A.dur); const t = A.t;
@@ -439,7 +462,7 @@ function updPProj(dt) {
       if (pr.id === 'shuriken') n = UP.clone().applyAxisAngle(vd, rnd(-0.45, 0.45));
       else n = new V3().crossVectors(vd, UP).normalize().applyAxisAngle(vd, rnd(-0.25, 0.25));
       const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, q);
-      if (e.hp <= pr.dmg || (pr.id === 'kunai' && e.d.armor)) killEnemy(e, plane, vd, { stroke: -2, weapon: pr.id });
+      if (e.hp <= pr.dmg || e.downed || (pr.id === 'kunai' && e.d.armor)) killEnemy(e, plane, vd, { stroke: -2, weapon: pr.id });
       else hurtEnemy(e, pr.dmg, q, vd);
       if (--pr.pierce <= 0) { removePProj(pr); break; }
     }
@@ -477,7 +500,7 @@ function doFling(x0, y0, x1, y1) {
     const sid = stroke;
     after(0.08 + dist / W.range(l) * 0.24, () => {
       if (!enemies.includes(e)) return;
-      if (e.hp <= W.dmg(l)) killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon: id }); else hurtEnemy(e, W.dmg(l), bodyCenter(e), sp.push);
+      if (e.hp <= W.dmg(l) || e.downed) killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon: id }); else hurtEnemy(e, W.dmg(l), bodyCenter(e), sp.push);
     });
   }
   hitProjectiles(ext);
@@ -559,7 +582,9 @@ function sliceSeg(seg, x0, y0, x1, y1, range, dmg, sid, weapon, bodies = true) {
   const sp = swipePlane(x0, y0, x1, y1); if (!sp) return 0;
   let kills = 0;
   for (const e of findTargets(seg, range, sid)) {
-    if (e.hp <= dmg) { killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon }); kills++; }
+    const spot = e.hp <= dmg && canWound(e) ? woundSpot(e, sp.plane) : null;
+    if (spot) woundEnemy(e, spot, sp.plane, sp.push);
+    else if (e.hp <= dmg || e.downed) { killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon }); kills++; }
     else hurtEnemy(e, dmg, nearestOnPlane(bodyCenter(e), sp.plane), sp.push);
   }
   hitProjectiles(seg);
@@ -578,6 +603,137 @@ function sliceBodies(seg, sp, range, sid) {
 }
 const nearestOnPlane = (p, plane) => plane.projectPoint(p, new V3());
 
+/* ============ wounds & finishers ============ */
+// A lethal blow that only clips the legs (low cut) or an arm (glancing side cut) cripples instead:
+// the enemy drops to his knees, bleeding and harmless, and can be executed with a finisher (Q / FINISH)
+// for bonus rewards. Any further hit kills him outright; left alone he bleeds out after a while.
+const FINISH_R = 3.6, BLEED_OUT = 20;
+let finish = null;
+const canWound = e => !e.d.boss && !e.d.dummy && !e.air && !e.downed && (!stage.tutorial || (tut && tut.wounds));
+function woundSpot(e, plane) {
+  const c = bodyCenter(e), off = plane.distanceToPoint(c), n = plane.normal;
+  const p = c.clone().addScaledVector(n, -off);
+  if (Math.abs(n.y) > 0.6 && p.y < e.y + e.d.h * 0.42) return 'legs';
+  if (Math.abs(n.y) < 0.6 && Math.abs(off) > e.d.w * 0.5) return 'arm';
+  return null;
+}
+function woundEnemy(e, spot, plane, push) {
+  e.downed = { t: 0, drip: 0, spot }; e.state = 'downed'; e.stagger = 0; e.t = 0;
+  const at = nearestOnPlane(bodyCenter(e), plane);
+  fx.burst(at, push, 26, 0.9); fx.flash(at, plane.normal, push, e.d.w * 3);
+  sfx.slice(0.8); shake = Math.max(shake, 0.2); hitStop = Math.max(hitStop, 0.05);
+  floater(spot === 'legs' ? 'CRIPPLED' : 'WOUNDED', headPos(e), '');
+  score += 25;
+  if (tut) tut.flags.wound = true;
+}
+function updDowned(e, dt, px, pz) {
+  const D = e.downed; D.t += dt; D.drip -= dt;
+  if (D.drip <= 0) { D.drip = rnd(0.25, 0.5); fx.burst(new V3(e.x, e.y + (D.spot === 'legs' ? 0.25 : 0.8) * e.s, e.z), UP, 3, 0.35); }
+  if (!e.finishing) { let da = Math.atan2(px - e.x, pz - e.z) - e.root.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); e.root.rotation.y += da * Math.min(1, dt * 2); }
+  // on his knees: thighs upright, shins flat behind, head bowed (lower still while being executed)
+  const P = e.P, k = 1 - Math.exp(-dt * 10), f = e.finishing ? 1 : 0, lean = 0.2 + 0.15 * f;
+  P.hips.position.y += (RIG.hips.y - 0.54 - P.hips.position.y) * k;
+  rotTo(P.hips, lean, k); rotTo(P.legL, -lean + 0.05, k); rotTo(P.legR, -lean - 0.08, k); rotTo(P.kneeL, 1.55, k); rotTo(P.kneeR, 1.45, k);
+  rotTo(P.head, 0.35 + 0.3 * f + Math.sin(D.t * 3) * 0.04, k);
+  rotTo(P.armL, -0.15, k); rotTo(P.elbowL, -0.5, k); rotTo(P.armR, D.spot === 'arm' ? 0.15 : -0.2, k); rotTo(P.elbowR, -0.2, k);
+  e.root.position.set(e.x, e.y, e.z);
+  if (D.t > BLEED_OUT && !e.finishing) killEnemy(e, new THREE.Plane().setFromNormalAndCoplanarPoint(UP, bodyCenter(e)), UP.clone(), { stroke: -4 });
+}
+function finishTarget() {
+  if (state !== 'play' || finish) return null;
+  let best = null, bd = FINISH_R;
+  for (const e of enemies) if (e.downed && !e.finishing && !e.stormed) { const d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z) - e.d.w; if (d < bd) { bd = d; best = e; } }
+  return best;
+}
+// Cinematic finisher (~2.7 s, real time): step in, letterbox + side camera, slow two-handed wind-up,
+// a snapping downward cut in heavy slow motion, a held follow-through while the camera pushes in,
+// then a blood-flick (chiburi) and everything eases back to normal.
+const FIN_STRIKE = 1.25, FIN_HIT = 1.31, FIN_END = 2.75;
+let cineW = 0;
+function tryFinish() {
+  if (finish) return true;
+  const e = finishTarget(); if (!e) return false;
+  const dx = player.pos.x - e.x, dz = player.pos.z - e.z, l = Math.hypot(dx, dz) || 1, r = 1.15 * e.s;
+  const x1 = e.x + dx / l * r, z1 = e.z + dz / l * r;
+  // film from whichever side keeps the camera inside the arena
+  const side = Math.hypot((x1 + e.x) / 2 + dz / l * 3, (z1 + e.z) / 2 - dx / l * 3) < Math.hypot((x1 + e.x) / 2 - dz / l * 3, (z1 + e.z) / 2 + dx / l * 3) ? 1 : -1;
+  finish = { e, t0: T, x0: player.pos.x, z0: player.pos.z, x1, z1, ex: e.x, ez: e.z, side, yaw0: player.yaw, yaw1: Math.atan2(dx, dz), pitch0: player.pitch };
+  e.finishing = true; invuln = FIN_END + 0.5; player.dashT = 0; player.vel.set(0, 0, 0);
+  document.body.classList.add('cine');
+  slowmo(0.55, 0.4); sfx.swish(0.8); fovKick = Math.max(fovKick, 6);
+  after(0.35, () => { sfx.warn(); slowmo(0.4, 0.9); });
+  after(FIN_HIT, finishStrike);
+  after(2.0, () => { sfx.swish(0.5); if (heroP.handR) fx.burst(heroP.handR.getWorldPosition(new V3()), new V3(Math.cos(player.yaw), 0, -Math.sin(player.yaw)), 10, 0.6); });   // chiburi
+  after(2.4, () => document.body.classList.remove('cine'));
+  after(FIN_END, () => { finish = null; });
+  return true;
+}
+function finishStrike() {
+  if (!finish) return;
+  const e = finish.e; if (enemies.indexOf(e) < 0) return;
+  sfx.swish(1.2);
+  e.root.updateMatrixWorld(true);
+  const neck = e.P.head.getWorldPosition(new V3()).add(new V3(0, 0.07 * e.s, 0));
+  const side = new V3(Math.cos(e.root.rotation.y), 0, -Math.sin(e.root.rotation.y));
+  const n = UP.clone().addScaledVector(side, 0.2).normalize();
+  killEnemy(e, new THREE.Plane().setFromNormalAndCoplanarPoint(n, neck), side.clone().add(new V3(0, 0.6, 0)), { stroke: ++stroke, weapon: cur });
+  fx.burst(neck, UP, 60, 1.5);
+  const fw = $('flashW'); fw.style.transition = 'none'; fw.style.opacity = 0.85; requestAnimationFrame(() => { fw.style.transition = 'opacity .7s'; fw.style.opacity = 0; });
+  banner('FINISHED', '介錯');
+  const b = e.d.value;
+  runCoins += b; score += 300; ult = Math.min(100, ult + 15);
+  floater('+' + b + ' FINISHER BONUS', { x: vw / 2, y: vh * 0.72 }, 'big');
+  slowmo(0.08, 0.75); shake = Math.max(shake, 0.6); hitStop = Math.max(hitStop, 0.12); fovKick = -9;
+  if (tut) tut.flags.finish = true;
+}
+// the player is carried through the finisher: step in and face the target
+function updFinishPlayer() {
+  const f = smooth(clamp((T - finish.t0) / 0.3, 0, 1));
+  player.pos.x = finish.x0 + (finish.x1 - finish.x0) * f; player.pos.z = finish.z0 + (finish.z1 - finish.z0) * f;
+  let dy = finish.yaw1 - finish.yaw0; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  player.yaw = finish.yaw0 + dy * f; player.pitch = finish.pitch0;
+  player.vel.set(0, 0, 0); player.moveDir.set(0, 0, 0);
+}
+// hero keyframes: [time, armR.x, armR.z, elbowR, armL.x, armL.z, elbowL, hips, legL, legR, kneeL, kneeR, drop]
+const FIN_KEYS = [
+  [0.0, -0.7, 0, -0.9, 0, 0, -0.8, 0.35, -0.5, 0.4, 0.5, 0.3, 0],              // dashing in
+  [0.3, -0.8, 0, -0.9, -0.3, 0, -0.9, 0.1, -0.35, 0.3, 0.35, 0.25, 0.03],      // planted stance
+  [FIN_STRIKE, -3.05, -0.15, -0.5, -2.75, 0.35, -0.7, -0.14, -0.35, 0.3, 0.35, 0.25, 0.02],   // blade raised overhead, two hands
+  [FIN_HIT + 0.04, -0.3, 0, -0.15, -0.45, 0, -0.4, 0.5, -0.65, 0.45, 0.95, 0.5, 0.14],   // the cut: deep lunge
+  [2.0, -0.35, 0, -0.15, -0.45, 0, -0.4, 0.45, -0.6, 0.45, 0.9, 0.5, 0.12],            // held follow-through
+  [2.3, -0.9, 1.1, -0.1, -0.1, 0, -0.6, 0.15, -0.35, 0.3, 0.35, 0.25, 0.03],          // chiburi: flick the blood off
+  [FIN_END, -0.7, 0, -0.9, 0, 0, -0.8, 0.12, 0, 0, 0.1, 0.1, 0],                       // back to ready
+];
+function finishPose(P) {
+  const u = T - finish.t0;
+  let i = 0; while (i < FIN_KEYS.length - 2 && u > FIN_KEYS[i + 1][0]) i++;
+  const a = FIN_KEYS[i], b = FIN_KEYS[i + 1], t = clamp((u - a[0]) / (b[0] - a[0]), 0, 1);
+  const s = a[0] === FIN_STRIKE ? t * t : smooth(t);   // the cut accelerates; everything else eases
+  const v = j => a[j] + (b[j] - a[j]) * s;
+  P.armR.rotation.x = v(1); P.armR.rotation.z = v(2); P.elbowR.rotation.x = v(3);
+  P.armL.rotation.x = v(4); P.armL.rotation.z = v(5); P.elbowL.rotation.x = v(6);
+  P.hips.rotation.x = v(7); P.legL.rotation.x = v(8); P.legR.rotation.x = v(9); P.kneeL.rotation.x = v(10); P.kneeR.rotation.x = v(11);
+  P.hips.position.y = RIG.hips.y - v(12); P.torso.rotation.y = 0; P.head.rotation.x = 0.25;
+}
+const _cP = new V3(), _cT = new V3(), _cM = new THREE.Matrix4(), _cQ = new THREE.Quaternion();
+function cineCam() {
+  const u = T - finish.t0;
+  cineW = smooth(clamp((u - 0.12) / 0.45, 0, 1)) * (1 - smooth(clamp((u - 2.35) / 0.4, 0, 1)));
+  if (cineW <= 0) return;
+  let dx = finish.ex - finish.x1, dz = finish.ez - finish.z1; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+  const mx = (finish.x1 + finish.ex) / 2, mz = (finish.z1 + finish.ez) / 2;
+  const wind = smooth(clamp((u - 0.3) / (FIN_STRIKE - 0.3), 0, 1)), post = smooth(clamp((u - FIN_HIT) / 0.9, 0, 1));
+  const ang = 1.2 + 0.3 * wind + 0.35 * post;              // angle from the player's side of the line, drifting round
+  const px = dz * finish.side, pz = -dx * finish.side;      // perpendicular
+  const cx = -dx * Math.cos(ang) + px * Math.sin(ang), cz = -dz * Math.cos(ang) + pz * Math.sin(ang);
+  const dist = 4.6 - 0.3 * wind - 1.3 * post, h = 1.35 + 0.1 * wind - 0.5 * post;   // wide enough for the raised blade, then push in low
+  _cP.set(mx + cx * dist, h, mz + cz * dist);
+  _cT.set(mx + dx * 0.35 * post, 1.2 + 0.1 * wind - 0.4 * post, mz + dz * 0.35 * post);   // drift toward the falling head after the cut
+  camera.position.lerp(_cP, cineW);
+  _cQ.setFromRotationMatrix(_cM.lookAt(_cP, _cT, UP));
+  camera.quaternion.slerp(_cQ, cineW);
+}
+
 /* ============ kills & bodies ============ */
 function cutBody(b, plane, push, sid) {
   const air = phys.airborne(b), at = nearestOnPlane(phys.center(b), plane);
@@ -594,6 +750,7 @@ function killEnemy(e, plane, push, opts = {}) {
   const i = enemies.indexOf(e); if (i < 0) return;
   enemies.splice(i, 1);
   scene.remove(e.root);
+  if (e.marks) { scene.remove(e.marks); for (const m of e.marks.children) m.geometry.dispose(); e.marks = null; }
   e.root.position.set(e.x, e.y, e.z);
   const toP = new V3(player.pos.x - e.x, 0, player.pos.z - e.z).normalize();
   const vel = e.air ? new V3((e.air.x1 - e.air.x0) / e.air.dur, 2, (e.air.z1 - e.air.z0) / e.air.dur) : toP.multiplyScalar(e.state === 'run' ? e.speed * 0.5 : 0);
@@ -605,6 +762,9 @@ function killEnemy(e, plane, push, opts = {}) {
   let res = phys.cut(mine[0], pl, pw, opts.stroke);
   if (!res) { pl = new THREE.Plane().setFromNormalAndCoplanarPoint(plane.normal, c); res = phys.cut(mine[0], pl, pw, opts.stroke); }
   if (res) mine = [...res, ...mine.slice(1)];
+  for (const p of opts.planes || []) {   // further cuts along given planes (Blade Storm marks)
+    for (const piece of mine.slice()) { const r = phys.cut(piece, p, p.normal, opts.stroke); if (r) mine.splice(mine.indexOf(piece), 1, ...r); }
+  }
   // extra cuts (boss, Blade Storm) on this enemy's own pieces
   const extra = opts.extra ?? (e.d.boss ? 4 : 0);
   for (let k = 0; k < extra; k++) {
@@ -682,14 +842,41 @@ function storm() {
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, bodyCenter(e));
     const s = toScreen(bodyCenter(e)); if (s) stormLines.push({ x: s.x, y: s.y, a: rnd(0, Math.PI), t: 0.35 });
     if (e.d.boss && e.hp > 12) hurtEnemy(e, 12, bodyCenter(e), n);
-    else killEnemy(e, plane, new V3().crossVectors(n, UP).normalize(), { stroke: sid, extra: e.d.boss ? 4 : 1, weapon: 'katana' });
+    else stormMark(e, plane, sid);
   }));
   for (const pr of eProj.slice()) deflect(pr);
+}
+
+// Blade Storm victims freeze where they stand with glowing cut lines traced across their bodies,
+// then fall apart along exactly those lines once the marks have burned for STORM_HOLD seconds.
+const STORM_HOLD = 2;
+function stormMark(e, plane, sid) {
+  const c = bodyCenter(e), planes = [plane];
+  for (let k = e.d.boss ? 3 : 1; k > 0; k--) {
+    const n = new V3(rnd(-1, 1), rnd(-0.7, 0.7), rnd(-0.4, 0.4)).normalize();
+    planes.push(new THREE.Plane().setFromNormalAndCoplanarPoint(n, c.clone().add(new V3(0, rnd(-0.3, 0.3) * e.d.h, 0))));
+  }
+  e.stormed = { t0: T, sid, planes, x: e.x, z: e.z };
+  e.marks = cutMarks(e.root, planes);
+  if (e.marks) scene.add(e.marks);
+  fx.flash(c, plane.normal, new V3().crossVectors(plane.normal, UP).normalize(), e.d.h * 1.2);
+  sfx.slice(0.4);
+  after(STORM_HOLD, () => {
+    if (!enemies.includes(e)) return;
+    killEnemy(e, planes[0], new V3().crossVectors(planes[0].normal, UP).normalize(), { stroke: sid, planes: planes.slice(1), extra: 0, weapon: 'katana' });
+  });
+}
+function updStormed(e) {
+  const S = e.stormed, u = T - S.t0, shiver = u > STORM_HOLD - 0.45 ? (u - STORM_HOLD + 0.45) * 0.05 : 0;   // a tremor just before they come apart
+  e.x = S.x + rnd(-shiver, shiver); e.z = S.z + rnd(-shiver, shiver);
+  e.root.position.set(e.x, e.y, e.z);
+  if (e.marks) e.marks.position.set(e.x - S.x, 0, e.z - S.z);
 }
 
 /* ============ stage flow ============ */
 let stroke = 0;
 function clearField() {
+  finish = null; cineW = 0; document.body.classList.remove('cine');
   for (const e of enemies) scene.remove(e.root);
   phys.clear();
   for (const p of pProj) scene.remove(p.g);
@@ -945,7 +1132,8 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (state === 'play') {
     if (k >= '1' && k <= '5') selectWeapon(WIDS[+k - 1]);
-    else if (k === 'q' || k === 'e' || k === 'f') storm();
+    else if (k === 'q') { if (!tryFinish()) storm(); }   // Q finishes a crippled enemy nearby, otherwise Blade Storm
+    else if (k === 'e' || k === 'f') storm();
     else if (k === 'c' || k === 'v') cycleCam();
     else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') dash();
     else if (e.code === 'Space' && !e.repeat) jump();
@@ -970,6 +1158,7 @@ function jump() {
   else if (player.jumps < 2) { player.vy = 7.2; player.jumps = 2; player.flip = 0.001; sfx.swish(0.8); fovKick = Math.max(fovKick, 6); if (tut) tut.flags.flip = true; }
 }
 function updPlayer(dt) {
+  if (finish) { updFinishPlayer(); return; }
   let fx = 0, fz = 0, turn = 0;
   if (keys.KeyW || keys.ArrowUp) fz -= 1;
   if (keys.KeyS || keys.ArrowDown) fz += 1;
@@ -1047,11 +1236,14 @@ function updHUD() {
   if (score !== hudScore) { $('score').textContent = score.toLocaleString(); hudScore = score; }
   $('hudCoinV').textContent = runCoins;
   $('prog').firstElementChild.style.width = (stage ? Math.min(100, killedCounted / stage.total * 100) : 0) + '%';
-  const u = $('ultBtn'); u.style.setProperty('--p', ult); u.classList.toggle('ready', ult >= 100);
+  const ft = finishTarget(), tip = $('finishTip'), s = ft && toScreen(new V3(ft.x, ft.y + ft.d.h * 0.75, ft.z));
+  tip.classList.toggle('hidden', !s); if (s) { tip.style.left = s.x + 'px'; tip.style.top = s.y + 'px'; }
+  const u = $('ultBtn'); u.style.setProperty('--p', ft ? 100 : ult); u.classList.toggle('ready', ult >= 100 || !!ft); u.classList.toggle('finish', !!ft);
+  $('ultLbl').textContent = ft ? 'FINISH' : 'STORM';
   $('wBar').querySelectorAll('.slot').forEach(b => { const id = b.dataset.w, mx = WEAP[id].cd(lvl(id) || 1); b.querySelector('.cd').style.height = (mx > 0 ? clamp(cds[id] / mx, 0, 1) * 100 : 0) + '%'; });
 }
 $('ultIcon').innerHTML = weaponIconSVG('storm');
-$('ultBtn').addEventListener('pointerdown', e => { e.stopPropagation(); storm(); });
+$('ultBtn').addEventListener('pointerdown', e => { e.stopPropagation(); if (!tryFinish()) storm(); });
 $('pauseBtn').addEventListener('pointerdown', e => { e.stopPropagation(); pause(); });
 $('dashBtn').addEventListener('pointerdown', e => { e.stopPropagation(); dash(); });
 $('jumpBtn').addEventListener('pointerdown', e => { e.stopPropagation(); jump(); });
@@ -1198,7 +1390,7 @@ const CAM_MODES = ['fp', 'tp', 'wide'], CAM_NAMES = { fp: 'First person', tp: 'T
 let hero = null;
 const heroP = {}, heroW = {};
 function buildHero() {
-  hero = buildEnemy('player'); hero.visible = false; scene.add(hero);
+  hero = batchParts(buildEnemy('player')); hero.visible = false; scene.add(hero);
   ['hips', 'torso', 'head', 'armL', 'armR', 'elbowL', 'elbowR', 'legL', 'legR', 'kneeL', 'kneeR', 'handR', 'ribbon'].forEach(n => heroP[n] = hero.getObjectByName(n));
   for (const id of WIDS) {
     const m = WEAPON_MODELS[id](); m.rotation.set(Math.PI / 2 + 0.25, 0, 0); m.visible = false;
@@ -1217,7 +1409,7 @@ function throwOrigin() {
   return heroP.handR.getWorldPosition(new V3());
 }
 function animHero(dt) {
-  const show = save.cam !== 'fp' && inGame();
+  const show = (save.cam !== 'fp' || cineW > 0.35) && inGame();   // the cinematic shows the hero even in first person
   hero.visible = show;
   if (!show) return;
   const P = heroP, k = 1 - Math.exp(-dt * 14), sp = clamp(Math.hypot(player.vel.x, player.vel.z) / SPEED, 0, 1);
@@ -1234,7 +1426,7 @@ function animHero(dt) {
   } else if (!player.ground) {
     rotTo(P.hips, 0.1, k); P.legL.rotation.x = -0.9; P.legR.rotation.x = 0.3; P.kneeL.rotation.x = 1.4; P.kneeR.rotation.x = 0.6;
   } else rotTo(P.hips, 0.12 + sp * 0.2 + (player.dashT > 0 ? 0.5 : 0), k);
-  P.hips.position.y = 0.95 + Math.abs(c) * 0.05 * sp;
+  P.hips.position.y = RIG.hips.y + Math.abs(c) * 0.05 * sp;
   P.armL.rotation.x = s * 0.7; P.elbowL.rotation.x = -0.8;
   P.head.rotation.x = -player.pitch * 0.4;
   P.ribbon.rotation.x = 0.75 + sp * 0.9 + (player.ground ? 0 : 0.7) + (player.dashT > 0 ? 0.6 : 0) + Math.sin(T * 13) * 0.08 * (0.3 + sp);   // headband tails stream behind
@@ -1248,6 +1440,7 @@ function animHero(dt) {
   } else {
     rotTo(P.armR, -0.7, k); P.armR.rotation.z *= 1 - k; rotTo(P.elbowR, -0.9, k); P.torso.rotation.y *= 1 - k;
   }
+  if (finish) finishPose(P);
   for (const id of WIDS) heroW[id].visible = id === cur;
   const sk = heroW.kusarigama.getObjectByName('sickle'); if (sk) sk.visible = !fling.on;
 }
@@ -1281,11 +1474,14 @@ const TUT_STEPS = [
     init: () => { trial = 'shuriken'; buildWBar(); spawnFront('dummy', 3, 11, 0.3); }, check: () => tut.kills >= 3 },
   { t: 'Dodge', d: 'A ninja attacks! A red ! means a strike is coming: dash or step away, then slice him.',
     init: () => { selectWeapon('katana'); spawnFront('grunt', 1, 9); }, check: () => !enemies.length },
+  { t: 'Finishers', d: () => sdk.touch ? 'Swipe LOW across his legs to cripple him instead of killing him. Then get close and tap FINISH.' : 'Slice LOW across his legs to cripple him instead of killing him. Then get close and press Q to finish him.',
+    init: () => { tut.wounds = true; tutTarget(); }, check: () => { if (!tut.flags.finish && !enemies.length) tutTarget(); return tut.flags.finish && !enemies.length; } },
   { t: 'Blade Storm', d: () => sdk.touch ? 'Your STORM gauge is full. Tap STORM to slice every enemy around you.' : 'Your Storm gauge is full. Press Q to slice every enemy around you.',
     init: () => { ult = 100; spawnFront('grunt', 4, 10, 0.5); }, check: () => tut.flags.storm && !enemies.length },
   { t: 'Camera views', d: () => sdk.touch ? 'Tap the camera button (top right) to switch between first person, third person and wide view.' : 'Press C (or the camera button, top right) to switch between first person, third person and wide view.',
     check: () => (tut.flags.cam || 0) >= 2 },
 ];
+function tutTarget() { spawnFront('grunt', 1, 4.5); enemies[enemies.length - 1].state = 'idle'; }   // a ninja who stands still for practice
 function startTutorial() {
   clearField();
   stage = { n: 0, tutorial: true, boss: false, queue: [], total: TUT_STEPS.length, theme: 2, speedMul: 1 };
@@ -1302,7 +1498,7 @@ function startTutorial() {
   $('stageTag').textContent = 'TRAINING GROUNDS';
   updHearts(); buildWBar(); updHUD();
   banner('TRAINING', 'TUTORIAL'); music('menu');
-  tut = { i: -1 }; nextTutStep();
+  tut = { i: -1, wounds: false }; nextTutStep();
   $('tutBox').classList.remove('hidden');
   gameplay(true); requestLock(); updLockUI();
 }
@@ -1497,6 +1693,7 @@ function step(rdt, now, draw = true) {
       if (AUTO) autopilot(dt);
       checkClear();
     }
+    MARK_MAT.opacity = 0.75 + 0.25 * Math.sin(T * 22);
     updEnemies(dt); updPProj(dt); updEProj(dt); updFling(dt);
     updHUD();
   }
@@ -1525,18 +1722,20 @@ function step(rdt, now, draw = true) {
       camera.position.lerp(_camT.set(hx - fx * dist, Math.max(0.35, hy - fy * dist), hz - fz * dist), state === 'play' ? kc : 1);
       camera.rotation.set(pitch, yaw, 0);
     }
+    if (finish && state === 'play') cineCam(); else cineW = 0;
     if (shake > 0) { const s = shake * shake * 0.09; camera.position.x += rnd(-s, s); camera.position.y += rnd(-s, s); camera.rotation.z += rnd(-s, s) * 0.3; }
   }
   landDip = Math.max(0, landDip - rdt * 0.6);
   fovKick *= Math.exp(-rdt * 6);
-  { const f = baseFov + fovKick; if (Math.abs(camera.fov - f) > 0.02) { camera.fov = f; camera.updateProjectionMatrix(); } }
+  { const f = baseFov + fovKick - 8 * cineW; if (Math.abs(camera.fov - f) > 0.02) { camera.fov = f; camera.updateProjectionMatrix(); } }
   camera.updateMatrixWorld();
   updateVM(rdt, T);
   if (!draw) return;
   if (composer) composer.render(); else renderer.render(scene, camera);
+  tuneRes(rdt);
   drawTrail(performance.now());
   drawThreats();
-  if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} q=${stage ? stage.queue.length : -1}`; }
+  if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
 }
 
 /* ============ boot ============ */
@@ -1560,13 +1759,14 @@ async function boot() {
   world = buildWorld(scene, renderer, quality);
   fx = makeFX(scene); fx.blood = save.blood;
   phys = makePhysics(scene, fx, sfx, world.arenaR);
-  for (const k of Object.keys(EDEF)) templates[k] = buildEnemy(k);
+  await loadBody('models/body.glb');
+  for (const k of Object.keys(EDEF)) templates[k] = batchParts(buildEnemy(k));   // fewer draw calls per enemy
   buildViewmodel(); buildFling(); buildHero();
   applyQuality();
   world.setTheme((save.sel - 1) % 3);
   // pre-warm shaders with one of everything on screen
   const warm = [];
-  for (const k of Object.keys(EDEF)) { const t = templates[k].clone(true); t.position.set(rnd(-3, 3), 0, -10); scene.add(t); warm.push(t); }
+  for (const k of Object.keys(EDEF)) { const t = cloneChar(templates[k]); t.position.set(rnd(-3, 3), 0, -10); scene.add(t); warm.push(t); }
   const st = enemyStar(); st.position.set(0, 1, -5); scene.add(st); warm.push(st);
   const wb = phys.fromEnemy(warm[0], new V3()); phys.cut(wb[0], new THREE.Plane(new V3(0, 1, 0), -1), new V3(1, 0, 0), -5);
   for (const id of WIDS) vmW[id].visible = true;
@@ -1583,6 +1783,12 @@ async function boot() {
   if (DEV && QS.get('w') && WEAP[QS.get('w')]) { trial = QS.get('w'); }
   if (test === 'play') startStage(+(QS.get('stage') || 1));
   if (test === 'arsenal') $('arsenalBtn').click();
+  if (test === 'storm') { startStage(+(QS.get('stage') || 2)); after(+(QS.get('at') || 1.6), () => { ult = 100; storm(); }); }   // dev: fire Blade Storm into the first wave
+  if (test === 'finish') {   // dev: a crippled ninja in front of you; &go runs the finisher
+    startStage(1);
+    after(0.3, () => { const e = spawnEnemy('grunt', player.pos.x, player.pos.z - 2.8, true); e.state = 'idle'; woundEnemy(e, 'legs', new THREE.Plane(UP.clone(), -0.4), new V3(1, 0, 0)); });
+    if (QS.has('go')) after(1.4, tryFinish);
+  }
   if (test === 'tutorial') { startTutorial(); if (QS.get('tstep')) { tut.i = +QS.get('tstep') - 2; nextTutStep(); } }
   if (test === 'tour') { $('arsenalBtn').click(); startTour(false); for (let i = 0; i < +(QS.get('tour') || 0); i++) nextTour(); }
   if (DEV && QS.get('cam')) save.cam = QS.get('cam');

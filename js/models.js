@@ -1,6 +1,7 @@
 // Procedural low-poly enemies (sliceable) and detailed ninja weapons.
 import * as THREE from 'three';
 import { part } from './slicer.js';
+import { RIG, attachBody } from './body.js';
 
 const D2R = Math.PI / 180;
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
@@ -30,44 +31,45 @@ function blade(len, w, curve = 0.05) {
 }
 
 const sph = (r, w = 16, h = 12) => new THREE.SphereGeometry(r, w, h);
-const capsule = (r, len, rs = 14) => new THREE.CapsuleGeometry(r, len, 5, rs);
 // convex solid of revolution from [radius, y] pairs (closed at both ends)
 const lathe = (prof, seg = 18) => new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), seg);
-const TORSO = [[0, 0], [0.16, 0.0], [0.185, 0.08], [0.205, 0.2], [0.222, 0.32], [0.215, 0.41], [0.17, 0.48], [0.1, 0.52], [0, 0.53]];
+
+// Pivot skeleton placed on the human body's joints (see body.js), plus the realistic skinned body itself.
+// Pivots keep their names and rest at zero rotation, so the animation and ragdoll code drive them as before.
+// Offsets below are relative to these pivots: head pivot = base of the neck, head centre ~ (0, 0.17, 0.05).
+const side = (v, sx) => new THREE.Vector3(sx < 0 ? v.x : -v.x, v.y, v.z);   // RIG stores the -x side
+function rigSkeleton(look) {
+  const R = RIG, root = new THREE.Group();
+  const pv = (name, parent, p) => { const g = new THREE.Group(); g.name = name; g.position.copy(p); parent.add(g); return g; };
+  const hips = pv('hips', root, R.hips);
+  const torso = pv('torso', hips, R.spine.clone().sub(R.hips));
+  pv('head', torso, R.neck.clone().sub(R.spine));
+  for (const sx of [-1, 1]) {
+    const s = sx < 0 ? 'L' : 'R', sh = side(R.sh, sx), el = side(R.el, sx), wr = side(R.wr, sx), hp = side(R.hp, sx), kn = side(R.kn, sx);
+    const palm = wr.clone().addScaledVector(wr.clone().sub(el).normalize(), 0.075);   // weapons sit in the closed fist
+    const arm = pv('arm' + s, torso, sh.clone().sub(R.spine)), elb = pv('elbow' + s, arm, el.clone().sub(sh));
+    pv('hand' + s, elb, palm.sub(el));
+    const leg = pv('leg' + s, hips, hp.clone().sub(R.hips));
+    pv('knee' + s, leg, kn.clone().sub(hp));
+  }
+  attachBody(root, look);
+  // ragdoll landmarks relative to pivots (chest point, head centre, foot)
+  root.userData.rig = { chest: R.chest.y - R.spine.y, head: 0.18, foot: R.an.y - R.kn.y };
+  return root;
+}
 
 function ninja(kind) {
   const c = PAL[kind];
-  const root = new THREE.Group();
-  const hips = pivot('hips', 0, 0.95, 0); root.add(hips);
-  hips.add(at(part(sph(0.17).scale(1.12, 0.72, 0.82), c.cloth), 0, -0.02, 0));                     // pelvis
-  hips.add(at(part(cyl(0.2, 0.205, 0.1, 24).scale(1, 1, 0.78), c.trim), 0, 0.07, 0));                 // obi sash
-  hips.add(at(part(sph(0.055).scale(1.5, 0.9, 0.6), c.trim), 0.05, 0.07, -0.16));                  // obi knot
-  for (const sx of [-1, 1]) hips.add(at(part(box(0.05, 0.2, 0.015), c.trim), 0.03 + sx * 0.03, -0.05, -0.17, 0.25, 0, sx * 0.12));   // knot tails
-  const torso = pivot('torso', 0, 0.1, 0); hips.add(torso);
-  torso.add(part(lathe(TORSO).scale(1, 1, 0.66), c.cloth));                                         // chest shell
-  for (const sx of [-1, 1]) torso.add(at(part(box(0.045, 0.34, 0.02), c.wrap), sx * 0.045, 0.3, 0.13, -0.05, 0, sx * 0.38));   // crossed kimono collar
-  torso.add(at(part(cyl(0.055, 0.062, 0.12, 14), c.wrap, 'body', 'limb'), 0, 0.55, 0));              // neck
-  const head = pivot('head', 0, 0.6, 0); torso.add(head);
-  head.add(at(part(sph(0.125, 20, 16).scale(1, 1.1, 1.06), c.cloth), 0, 0.14, 0));                  // hood
-  head.add(at(part(sph(0.1, 18, 12).scale(1.05, 0.42, 0.62), c.skin), 0, 0.155, 0.07));             // face opening
-  for (const sx of [-1, 1]) head.add(at(part(sph(0.019, 10, 8).scale(1.7, 0.75, 0.6), c.eye, 'glow'), sx * 0.042, 0.16, 0.128));
-  head.add(at(part(cyl(0.133, 0.133, 0.036, 24), c.trim), 0, 0.225, 0));                              // headband
-  head.add(at(part(box(0.045, 0.3, 0.014), c.trim), 0.05, 0.1, -0.15, 0.35, 0, 0.25));                // headband tails
-  head.add(at(part(box(0.045, 0.26, 0.014), c.trim), -0.03, 0.1, -0.155, 0.45, 0, -0.15));
-  for (const sx of [-1, 1]) {
-    const arm = pivot(sx < 0 ? 'armL' : 'armR', 0.25 * sx, 0.46, 0); torso.add(arm);
-    arm.add(part(sph(0.078), c.cloth));                                                              // shoulder
-    arm.add(at(part(capsule(0.06, 0.2), c.cloth, 'body', 'limb'), 0, -0.14, 0));                      // upper arm (sleeve)
-    const el = pivot(sx < 0 ? 'elbowL' : 'elbowR', 0, -0.3, 0); arm.add(el);
-    el.add(at(part(capsule(0.05, 0.18), c.wrap, 'body', 'limb'), 0, -0.13, 0));                       // bandaged forearm
-    el.add(at(part(sph(0.052).scale(0.95, 1.15, 0.85), c.skin, 'body', 'limb'), 0, -0.3, 0.005));    // hand
-    const hand = pivot(sx < 0 ? 'handL' : 'handR', 0, -0.31, 0); el.add(hand);
-    const leg = pivot(sx < 0 ? 'legL' : 'legR', 0.1 * sx, -0.06, 0); hips.add(leg);
-    leg.add(at(part(capsule(0.082, 0.26), c.cloth, 'body', 'limb'), 0, -0.2, 0));                     // thigh
-    const kn = pivot(sx < 0 ? 'kneeL' : 'kneeR', 0, -0.42, 0); leg.add(kn);
-    kn.add(at(part(capsule(0.063, 0.28), c.wrap, 'body', 'limb'), 0, -0.2, 0));                       // shin wraps
-    kn.add(at(part(capsule(0.048, 0.13).rotateX(Math.PI / 2).scale(1.25, 1, 1), 0x15161a, 'body', 'limb'), 0, -0.43, 0.045));   // tabi foot
-  }
+  const root = rigSkeleton({ surface: c.cloth, joints: c.wrap });
+  const hips = root.getObjectByName('hips'), torso = root.getObjectByName('torso'), head = root.getObjectByName('head');
+  hips.add(at(part(cyl(1, 1, 1, 24).scale(0.262, 0.075, 0.2), c.trim), 0, 0.06, 0.0));                // obi sash
+  hips.add(at(part(sph(0.05).scale(1.5, 0.9, 0.6), c.trim), 0.05, 0.06, -0.22));                          // obi knot
+  for (const sx of [-1, 1]) hips.add(at(part(box(0.045, 0.18, 0.014), c.trim), 0.03 + sx * 0.03, -0.04, -0.225, 0.25, 0, sx * 0.12));   // knot tails
+  for (const sx of [-1, 1]) torso.add(at(part(box(0.04, 0.26, 0.016), c.wrap), sx * 0.04, 0.2, 0.165, -0.18, 0, sx * 0.4));        // crossed kimono collar
+  for (const sx of [-1, 1]) head.add(at(part(sph(0.015, 10, 8).scale(1.7, 0.7, 0.6), c.eye, 'glow'), sx * 0.034, 0.17, 0.165));  // eye glints
+  head.add(at(part(cyl(1, 1, 1, 28).scale(0.098, 0.034, 0.118), c.trim), 0, 0.225, 0.048));               // headband
+  head.add(at(part(box(0.04, 0.26, 0.012), c.trim), 0.04, 0.12, -0.075, 0.35, 0, 0.25));                // headband tails
+  head.add(at(part(box(0.04, 0.22, 0.012), c.trim), -0.025, 0.12, -0.08, 0.45, 0, -0.15));
   return root;
 }
 
@@ -85,18 +87,18 @@ export function buildEnemy(kind) {
   if (kind === 'dummy') return buildDummy();
   if (kind === 'player') {   // the hero, shown in third-person views (never sliced)
     const r = ninja('player'), head = r.getObjectByName('head'), torso = r.getObjectByName('torso');
-    const rib = pivot('ribbon', 0, 0.225, -0.13); head.add(rib);                                     // long flowing headband tails
+    const rib = pivot('ribbon', 0, 0.225, -0.075); head.add(rib);                                       // long flowing headband tails
     for (const sx of [-1, 1]) rib.add(at(part(box(0.034, 0.85, 0.008).translate(0, -0.425, 0), 0xb01e18), sx * 0.035, 0, 0, 0, sx * 0.15, sx * 0.16));
-    head.add(at(part(sph(0.052).scale(1, 1.35, 1), 0x0e0d0c), 0, 0.29, -0.07, -0.5, 0, 0));          // topknot
-    torso.add(at(part(cyl(0.022, 0.026, 0.9, 12), 0x0c0b0a, 'body', 'wood'), -0.06, 0.32, -0.17, 0, 0, 0.78));   // scabbard across the back
-    torso.add(at(part(cyl(0.05, 0.05, 0.015, 16), 0x3a3430, 'metal', 'metal'), 0.22, 0.6, -0.17, 0, 0, 0.78));
+    head.add(at(part(sph(0.045).scale(1, 1.35, 1), 0x0e0d0c), 0, 0.31, -0.04, -0.5, 0, 0));          // topknot
+    torso.add(at(part(cyl(0.022, 0.026, 0.9, 12), 0x0c0b0a, 'body', 'wood'), -0.06, 0.24, -0.25, 0, 0, 0.78));   // scabbard across the back
+    torso.add(at(part(cyl(0.05, 0.05, 0.015, 16), 0x3a3430, 'metal', 'metal'), 0.22, 0.52, -0.25, 0, 0, 0.78));
     return r;
   }
   root = ninja(kind);
   const handR = root.getObjectByName('handR'), handL = root.getObjectByName('handL');
   if (kind === 'grunt') {
     const k = enemyKatana(); k.rotation.x = Math.PI / 2 + 0.2; handR.add(k);
-    root.getObjectByName('torso').add(at(part(cyl(0.025, 0.025, 0.6, 6), 0x111114), -0.12, 0.25, -0.17, 0, 0, 0.8));   // scabbard on back
+    root.getObjectByName('torso').add(at(part(cyl(0.025, 0.025, 0.6, 6), 0x111114), -0.12, 0.2, -0.24, 0, 0, 0.8));   // scabbard on back
   } else if (kind === 'runner') {
     for (const h of [handR, handL]) {
       const k = new THREE.Group();
@@ -106,17 +108,17 @@ export function buildEnemy(kind) {
     scale = 0.93;
   } else if (kind === 'archer') {
     const head = root.getObjectByName('head');
-    head.add(at(part(cyl(0.02, 0.38, 0.14, 24), 0x7a6a50, 'body', 'wood'), 0, 0.3, 0));                         // straw hat
-    root.getObjectByName('torso').add(at(part(box(0.22, 0.26, 0.1), 0x2a221a, 'body', 'wood'), 0, 0.3, -0.19)); // quiver pack
+    head.add(at(part(cyl(0.02, 0.36, 0.13, 24), 0x7a6a50, 'body', 'wood'), 0, 0.31, 0.04));                     // straw hat
+    root.getObjectByName('torso').add(at(part(box(0.2, 0.26, 0.09), 0x2a221a, 'body', 'wood'), 0, 0.22, -0.28)); // quiver pack
   } else if (kind === 'samurai') {
     const torso = root.getObjectByName('torso'), head = root.getObjectByName('head');
-    torso.add(at(part(lathe([[0, 0], [0.22, 0], [0.25, 0.16], [0.26, 0.3], [0.2, 0.4], [0, 0.42]], 20).scale(1, 1, 0.74), 0x2a2624, 'body', 'wood'), 0, 0.1, 0));   // do (chest plate)
-    for (let i = 0; i < 3; i++) torso.add(at(part(box(0.5 - i * 0.02, 0.05, 0.36), i % 2 ? 0x6e1410 : 0x1e1c1a, 'body', 'wood'), 0, -0.04 - i * 0.07, 0));   // kusazuri
-    for (const sx of [-1, 1]) torso.add(at(part(box(0.2, 0.05, 0.26), 0x2a2624, 'body', 'wood'), 0.33 * sx, 0.52, 0, 0, 0, -0.45 * sx));            // sode
-    head.add(at(part(new THREE.SphereGeometry(0.16, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), 0x1a1a1e, 'metal', 'metal'), 0, 0.17, 0));             // kabuto
-    head.add(at(part(cyl(0.25, 0.23, 0.03, 24), 0x1a1a1e, 'metal', 'metal'), 0, 0.16, -0.03, -0.25, 0, 0));
-    for (const sx of [-1, 1]) head.add(at(part(box(0.035, 0.26, 0.012).translate(0, 0.13, 0), 0xa89468, 'metal', 'metal'), sx * 0.03, 0.27, 0.11, -0.25, 0, -sx * 0.55));   // kuwagata horns
-    head.add(at(part(box(0.2, 0.08, 0.05), 0x3a1010), 0, 0.09, 0.12));                                                                              // menpo
+    torso.add(at(part(lathe([[0, 0], [0.18, 0], [0.198, 0.12], [0.204, 0.24], [0.17, 0.33], [0, 0.35]], 20).scale(1, 1, 1.1), 0x2a2624, 'body', 'wood'), 0, 0.0, -0.03));   // do (chest plate)
+    for (let i = 0; i < 3; i++) torso.add(at(part(box(0.5 - i * 0.02, 0.05, 0.4), i % 2 ? 0x6e1410 : 0x1e1c1a, 'body', 'wood'), 0, -0.04 - i * 0.07, -0.01));   // kusazuri
+    for (const sx of [-1, 1]) torso.add(at(part(box(0.15, 0.04, 0.2), 0x2a2624, 'body', 'wood'), 0.26 * sx, 0.36, -0.06, 0, 0, -0.5 * sx));            // sode
+    head.add(at(part(new THREE.SphereGeometry(0.135, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 1, 1.1), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.05));   // kabuto
+    head.add(at(part(cyl(0.2, 0.18, 0.025, 24), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.02, -0.25, 0, 0));
+    for (const sx of [-1, 1]) head.add(at(part(box(0.03, 0.22, 0.01).translate(0, 0.11, 0), 0xa89468, 'metal', 'metal'), sx * 0.03, 0.3, 0.15, -0.25, 0, -sx * 0.55));   // kuwagata horns
+    head.add(at(part(box(0.14, 0.07, 0.04), 0x3a1010), 0, 0.11, 0.155));                                                                             // menpo
     const yari = new THREE.Group();                                                                        // spearman's yari
     yari.add(at(part(cyl(0.018, 0.02, 2.1, 10), 0x2a1e14, 'body', 'wood'), 0, 0.45, 0));
     yari.add(at(part(cyl(0.026, 0.022, 0.08, 10), 0x4a4440, 'metal', 'metal'), 0, 1.52, 0));
@@ -129,40 +131,20 @@ export function buildEnemy(kind) {
 }
 
 function buildOni() {
-  const root = new THREE.Group();
   const skin = 0x231b18, dark = 0x100b0a, tiger = 0x5e5040;
-  const hips = pivot('hips', 0, 0.95, 0); root.add(hips);
-  hips.add(at(part(sph(0.24).scale(1.1, 0.62, 0.8), tiger), 0, -0.02, 0));                          // tiger-skin loincloth
-  for (let i = 0; i < 5; i++) hips.add(at(part(box(0.035, 0.12, 0.02), 0x1a1a1a), -0.16 + i * 0.08, -0.02, 0.19, 0, 0, 0.3));   // stripes
-  const torso = pivot('torso', 0, 0.1, 0); hips.add(torso);
-  torso.add(part(lathe([[0, 0], [0.26, 0], [0.3, 0.12], [0.36, 0.3], [0.38, 0.44], [0.33, 0.56], [0.2, 0.64], [0, 0.66]], 20).scale(1, 1, 0.74), skin));
-  for (const sx of [-1, 1]) torso.add(at(part(sph(0.15).scale(1.1, 0.7, 0.55), skin), sx * 0.14, 0.42, 0.17));   // pecs
-  torso.add(at(part(sph(0.24).scale(1.1, 0.85, 0.62), skin), 0, 0.17, 0.1));                          // belly
-  const head = pivot('head', 0, 0.66, 0.04); torso.add(head);
-  head.add(at(part(sph(0.2, 22, 16).scale(1.05, 1, 0.95), skin), 0, 0.17, 0));
-  head.add(at(part(sph(0.12).scale(1.9, 0.5, 0.8), dark), 0, 0.25, 0.1));                             // heavy brow
-  head.add(at(part(sph(0.07).scale(1.4, 1, 1), skin), 0, 0.15, 0.18));                                 // nose
+  const root = rigSkeleton({ surface: skin, joints: dark });
+  const hips = root.getObjectByName('hips'), head = root.getObjectByName('head');
+  hips.add(at(part(sph(0.2).scale(1.18, 0.55, 0.98), tiger), 0, -0.04, -0.005));                       // tiger-skin loincloth
+  for (let i = 0; i < 5; i++) hips.add(at(part(box(0.03, 0.09, 0.02), 0x1a1a1a), -0.12 + i * 0.06, -0.04, 0.185, 0, 0, 0.3));   // stripes
+  head.add(at(part(sph(0.06).scale(1.7, 0.45, 0.8), dark), 0, 0.22, 0.14));                           // heavy brow
+  head.add(at(part(sph(0.045).scale(1.5, 0.4, 0.5), 0x2a0606), 0, 0.115, 0.15));                      // mouth
+  head.add(at(part(sph(0.09).scale(1.3, 0.75, 1.2), 0x1c1414), 0, 0.28, -0.02));                       // wild hair
   for (const sx of [-1, 1]) {
-    head.add(at(part(sph(0.03, 10, 8).scale(1.6, 0.8, 0.6), 0xe0281c, 'glow'), 0.075 * sx, 0.2, 0.175));
-    head.add(at(part(new THREE.ConeGeometry(0.05, 0.24, 12), 0xf1e6c8, 'body', 'bone'), 0.11 * sx, 0.4, 0, 0, 0, -0.35 * sx));
-    head.add(at(part(new THREE.ConeGeometry(0.02, 0.075, 8), 0xf6f0de, 'body', 'bone'), 0.055 * sx, 0.05, 0.16, Math.PI, 0, 0));   // tusks
-  }
-  head.add(at(part(sph(0.09).scale(1.5, 0.4, 0.5), 0x2a0606), 0, 0.07, 0.15));                        // mouth
-  head.add(at(part(sph(0.14).scale(1.5, 0.6, 1.2), 0x1c1414), 0, 0.31, -0.07));                        // wild hair
-  for (const sx of [-1, 1]) {
-    const arm = pivot(sx < 0 ? 'armL' : 'armR', 0.42 * sx, 0.55, 0); torso.add(arm);
-    arm.add(part(sph(0.14), skin));
-    arm.add(at(part(capsule(0.105, 0.24), skin, 'body', 'limb'), 0, -0.18, 0));
-    const el = pivot(sx < 0 ? 'elbowL' : 'elbowR', 0, -0.36, 0); arm.add(el);
-    el.add(at(part(capsule(0.09, 0.2), skin, 'body', 'limb'), 0, -0.16, 0));
-    el.add(at(part(cyl(0.1, 0.1, 0.07, 18), 0x6a5a40, 'metal', 'metal'), 0, -0.25, 0));               // gold bracer
-    el.add(at(part(sph(0.095).scale(1, 1.1, 0.9), skin, 'body', 'limb'), 0, -0.38, 0));
-    const hand = pivot(sx < 0 ? 'handL' : 'handR', 0, -0.38, 0); el.add(hand);
-    const leg = pivot(sx < 0 ? 'legL' : 'legR', 0.15 * sx, -0.06, 0); hips.add(leg);
-    leg.add(at(part(capsule(0.125, 0.22), skin, 'body', 'limb'), 0, -0.21, 0));
-    const kn = pivot(sx < 0 ? 'kneeL' : 'kneeR', 0, -0.42, 0); leg.add(kn);
-    kn.add(at(part(capsule(0.095, 0.26), skin, 'body', 'limb'), 0, -0.21, 0));
-    kn.add(at(part(capsule(0.07, 0.14).rotateX(Math.PI / 2).scale(1.3, 1, 1), dark, 'body', 'limb'), 0, -0.44, 0.06));
+    head.add(at(part(sph(0.017, 10, 8).scale(1.6, 0.8, 0.6), 0xe0281c, 'glow'), 0.036 * sx, 0.19, 0.16));
+    head.add(at(part(new THREE.ConeGeometry(0.028, 0.14, 12), 0xf1e6c8, 'body', 'bone'), 0.065 * sx, 0.33, 0.04, 0, 0, -0.35 * sx));   // horns
+    head.add(at(part(new THREE.ConeGeometry(0.011, 0.04, 8), 0xf6f0de, 'body', 'bone'), 0.028 * sx, 0.1, 0.15, Math.PI, 0, 0));     // tusks
+    const el = root.getObjectByName(sx < 0 ? 'elbowL' : 'elbowR'), wr = root.getObjectByName(sx < 0 ? 'handL' : 'handR').position;
+    el.add(at(part(cyl(0.055, 0.055, 0.06, 18), 0x6a5a40, 'metal', 'metal'), wr.x * 0.6, wr.y * 0.6, wr.z * 0.6, 0, 0, Math.atan2(wr.x, -wr.y)));   // gold bracer
   }
   // kanabo club
   const club = new THREE.Group();

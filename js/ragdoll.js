@@ -1,7 +1,8 @@
 // Physics for the dead: articulated verlet ragdolls that stay on the ground and can be cut again and again,
 // plus rigid chunks (severed pieces, dropped weapons) with real contact so they topple and lie flat.
 import * as THREE from 'three';
-import { clipGeo, capColor, sliceChunk, disposeChunk, chunkFrom, MATS } from './slicer.js';
+import { clipGeo, capColor, sliceChunk, disposeChunk, chunkFrom, MATS, unbatchParts } from './slicer.js';
+import { bakeBody } from './body.js';
 
 const V3 = THREE.Vector3;
 const G = 19, H = 1 / 120, ITERS = 8;
@@ -58,15 +59,17 @@ export function makePhysics(scene, fx, sfx, arenaR) {
 
   // Build a ragdoll from a posed enemy hierarchy (named pivots). Weapons held in the hands drop as rigid chunks.
   S.fromEnemy = (root, vel) => {
+    unbatchParts(root);   // back to separate convex parts so cuts get clean caps
     root.updateMatrixWorld(true);
     if (!root.getObjectByName('hips')) return [S.addRigid(bakeRoot(root), vel.clone(), new V3())];
     const s = root.scale.x;
     const W = (n, x = 0, y = 0, z = 0) => root.getObjectByName(n).localToWorld(new V3(x, y, z));
     const P = (v, r, w = 1) => new Pt(v, r * s, w);
+    const L = root.userData.rig || { chest: 0.4, head: 0.27, foot: -0.44 };   // landmark offsets from the pivots
     const J = {
-      pel: P(W('hips'), 0.12, 0.5), chest: P(W('torso', 0, 0.4, 0), 0.13, 0.5), neck: P(W('head'), 0.07), head: P(W('head', 0, 0.27, 0), 0.115, 0.8),
+      pel: P(W('hips'), 0.12, 0.5), chest: P(W('torso', 0, L.chest, 0), 0.13, 0.5), neck: P(W('head'), 0.07), head: P(W('head', 0, L.head, 0.03), 0.115, 0.8),
       shL: P(W('armL'), 0.07), elL: P(W('elbowL'), 0.05), haL: P(W('handL'), 0.045), shR: P(W('armR'), 0.07), elR: P(W('elbowR'), 0.05), haR: P(W('handR'), 0.045),
-      hpL: P(W('legL'), 0.08), knL: P(W('kneeL'), 0.06), ftL: P(W('kneeL', 0, -0.44, 0.05), 0.05), hpR: P(W('legR'), 0.08), knR: P(W('kneeR'), 0.06), ftR: P(W('kneeR', 0, -0.44, 0.05), 0.05),
+      hpL: P(W('legL'), 0.08), knL: P(W('kneeL'), 0.06), ftL: P(W('kneeL', 0, L.foot, 0.05), 0.05), hpR: P(W('legR'), 0.08), knR: P(W('kneeR'), 0.06), ftR: P(W('kneeR', 0, L.foot, 0.05), 0.05),
     };
     const sh = [J.shL, J.shR];
     const cons = [], B = (a, b, ref) => { const c = bone(a, b, ref); cons.push(c); return c; };
@@ -84,6 +87,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
     cons.push(limit(J.ftL, J.ftR, 0.12 * s), limit(J.knL, J.knR, 0.1 * s), limit(J.haL, J.chest, 0.12 * s), limit(J.haR, J.chest, 0.12 * s));
     const MAP = { hips: bones.spine, torso: bones.spine, head: bones.head, armL: bones.uaL, elbowL: bones.faL, armR: bones.uaR, elbowR: bones.faR, legL: bones.thL, kneeL: bones.shinL, legR: bones.thR, kneeR: bones.shinR };
     const parts = [], dropped = { handL: [], handR: [] };
+    for (const b of bakeBody(root)) parts.push(mkPart(b.geo, MATS.body, b.cap, MAP[b.key] || bones.spine));   // realistic skin -> rigid pieces
     root.traverse(o => {
       if (!o.isMesh || !o.visible || o.userData.noSlice) return;
       let p = o.parent, key = null;
@@ -384,8 +388,8 @@ export function makePhysics(scene, fx, sfx, arenaR) {
       if (bl.t <= 0) { S.bleed.splice(S.bleed.indexOf(bl), 1); continue; }
       if (Math.random() < dt * 26 * Math.min(1, bl.t)) fx.spray(bl.pt.p, _a.subVectors(bl.pt.p, bl.from.p).normalize(), 1, 1.2 + bl.t);
     }
-    // keep the battlefield readable: the oldest sleeping bodies sink away
-    const sinkOld = (list, max) => { const live = list.filter(x => !x.sink); if (live.length > max) { live.sort((a, b) => b.age - a.age); for (const x of live.slice(0, live.length - max)) { if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); } x.sink = 0.001; } } };
+    // keep the battlefield readable: the oldest bodies sink away, but only once they have settled on the ground
+    const sinkOld = (list, max) => { const live = list.filter(x => !x.sink); if (live.length <= max) return; const ok = live.filter(x => x.asleep || x.age > 8).sort((a, b) => b.age - a.age); for (const x of ok.slice(0, live.length - max)) { if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); } x.sink = 0.001; } };
     sinkOld(S.dolls, MAX_DOLLS); sinkOld(S.rigids, MAX_RIGIDS);
   };
   // wake a sleeping body (e.g. when stepped on or hit)

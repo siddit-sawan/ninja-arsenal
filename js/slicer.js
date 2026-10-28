@@ -214,3 +214,44 @@ export function sliceChunk(chunk, worldPlane) {
 }
 
 export function disposeChunk(c) { for (const m of c.children) m.geometry.dispose(); }
+
+// --- draw-call batching for living characters --------------------------------
+// Parts stay separate so slicing keeps clean convex caps, but rendering ~40 meshes per enemy is slow.
+// batchParts merges each pivot's direct mesh children (per material) into one proxy for drawing and
+// hides the originals; unbatchParts restores them right before the body becomes a ragdoll.
+export function batchParts(root) {
+  const groups = [];
+  root.traverse(o => {
+    if (o.isMesh) return;
+    const by = new Map();
+    for (const m of o.children) if (m.isMesh && !m.isSkinnedMesh && m.visible && !m.userData.proxy) { let a = by.get(m.material); if (!a) by.set(m.material, a = []); a.push(m); }
+    for (const [mat, ms] of by) if (ms.length > 1) groups.push({ o, mat, ms });
+  });
+  for (const { o, mat, ms } of groups) {
+    let n = 0; for (const m of ms) n += m.geometry.attributes.position.count;
+    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), C = new Float32Array(n * 3), _n = new THREE.Matrix3(), v = new THREE.Vector3();
+    let k = 0;
+    for (const m of ms) {
+      m.updateMatrix(); _n.getNormalMatrix(m.matrix);
+      const g = m.geometry.attributes, cnt = g.position.count;
+      for (let i = 0; i < cnt; i++, k += 3) {
+        v.fromBufferAttribute(g.position, i).applyMatrix4(m.matrix); P[k] = v.x; P[k + 1] = v.y; P[k + 2] = v.z;
+        v.fromBufferAttribute(g.normal, i).applyMatrix3(_n).normalize(); N[k] = v.x; N[k + 1] = v.y; N[k + 2] = v.z;
+        C[k] = g.color.getX(i); C[k + 1] = g.color.getY(i); C[k + 2] = g.color.getZ(i);
+      }
+      m.visible = false; m.userData.batched = true;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(P, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(N, 3)); geo.setAttribute('color', new THREE.BufferAttribute(C, 3));
+    geo.computeBoundingSphere();
+    const proxy = new THREE.Mesh(geo, mat);
+    proxy.castShadow = mat !== MATS.glow; proxy.userData.proxy = true; proxy.userData.noSlice = true;
+    o.add(proxy);
+  }
+  return root;
+}
+export function unbatchParts(root) {
+  const proxies = [];
+  root.traverse(o => { if (o.userData.batched) { o.visible = true; o.userData.batched = false; } else if (o.userData.proxy) proxies.push(o); });
+  for (const p of proxies) p.parent.remove(p);   // geometry is shared with the template, so it is not disposed
+}

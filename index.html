@@ -107,6 +107,10 @@ button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}
 #ultBtn div{width:100%;height:100%;border-radius:50%;background:#14111d;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:10px;font-weight:900;letter-spacing:.1em;line-height:1.1}
 #ultBtn svg{width:30px;height:30px;color:#fff;margin-bottom:2px}
 #ultBtn.ready{animation:glow 1s infinite alternate}
+#ultBtn.finish div{background:radial-gradient(#f2c14e,#8a5a0c)}
+#finishTip{position:fixed;transform:translate(-50%,-100%);z-index:4;pointer-events:none;display:flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:999px;background:#120e0bd9;color:#f6eedc;font-weight:900;font-size:13px;letter-spacing:.12em;box-shadow:0 0 0 2px #b01e18;animation:glow 0.7s infinite alternate}
+#finishTip b{display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:#f6eedc;color:#120e0b;font-size:13px}
+body.touch #finishTip b{display:none}
 #ultBtn.ready div{background:radial-gradient(#ff5a3a,#7a0c0c)}
 @keyframes glow{to{box-shadow:0 0 30px #ff4a2a}}
 #cross{position:fixed;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;z-index:3;pointer-events:none;border:2px solid #ffffffcc;border-radius:50%;box-shadow:0 0 4px #000}
@@ -143,6 +147,11 @@ body:not(.touch) #dashBtn{display:none}
 #wdLvlTxt{font-size:12px;font-weight:800;letter-spacing:.12em;color:var(--mut);text-transform:uppercase}
 #vignette{position:fixed;inset:0;z-index:3;pointer-events:none;background:radial-gradient(ellipse at center,transparent 45%,rgba(220,0,0,.65));opacity:0;transition:opacity .4s}
 #flashW{position:fixed;inset:0;z-index:3;pointer-events:none;background:#fff;opacity:0}
+#lbT,#lbB{position:fixed;left:0;right:0;height:0;background:#0b0907;z-index:3;pointer-events:none;transition:height .45s cubic-bezier(.2,.8,.2,1)}
+#lbT{top:0}#lbB{bottom:0}
+body.cine #lbT,body.cine #lbB{height:12vh}
+#hud{transition:opacity .3s}
+body.cine #hud{opacity:0}
 #floaters{position:fixed;inset:0;z-index:4;pointer-events:none;overflow:hidden}
 .fl{position:absolute;transform:translate(-50%,-50%);font-weight:900;font-style:italic;white-space:nowrap;text-shadow:0 3px 6px #000,0 0 2px #000;animation:fl 1s ease-out forwards}
 .fl.big{font-size:40px;color:var(--gold);animation-duration:1.3s}
@@ -258,7 +267,7 @@ html,body{background:#e9dcc0;color:var(--txt)}
 <canvas id="c"></canvas>
 <canvas id="trail"></canvas>
 <div id="paper"></div>
-<div id="vignette"></div><div id="flashW"></div>
+<div id="vignette"></div><div id="flashW"></div><div id="lbT"></div><div id="lbB"></div>
 <div id="cross" class="hidden"></div>
 <div id="joy" class="hidden"><div></div></div>
 <div id="lockHint" class="hidden"><b>CLICK TO FIGHT</b><span>WASD move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · Q Blade Storm · C camera · Esc pause</span></div>
@@ -277,7 +286,8 @@ html,body{background:#e9dcc0;color:var(--txt)}
   <div id="wBar"></div>
   <button id="dashBtn" aria-label="Dash">DASH</button>
   <button id="jumpBtn" aria-label="Jump">JUMP</button>
-  <button id="ultBtn" aria-label="Blade Storm"><div><span id="ultIcon"></span>STORM</div></button>
+  <div id="finishTip" class="hidden"><b>Q</b>FINISH</div>
+  <button id="ultBtn" aria-label="Blade Storm"><div><span id="ultIcon"></span><span id="ultLbl">STORM</span></div></button>
 </div>
 
 <div id="coinsBadge" class="hidden"><span class="coinI"></span><span id="coins">0</span></div>
@@ -291,7 +301,7 @@ html,body{background:#e9dcc0;color:var(--txt)}
     <button class="btn red" id="playBtn">Play</button>
     <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
   </div>
-  <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm · Esc pause</div>
+  <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm / finisher · Esc pause</div>
 </div>
 
 <div id="arsenal" class="layer hidden">
