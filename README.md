@@ -67,7 +67,16 @@ Each weapon shows Power, Range, and Speed with exact values, plus green previews
 | 5 | Naginata | swipe | One huge edge-to-edge sweep per stroke |
 | Q | Blade Storm | button / Q / Space | Ultimate: slow motion, every enemy on screen is sliced |
 
-Enemies: ninja grunts, zig-zag runners, shuriken-throwing archers (swipe their stars to block), armored samurai (3 HP), and an Oni Warlord boss every 5th stage that summons minions. There are 4 times of day (Dusk, Moonlit, Sakura Dawn, Blood Moon), and stages go on endlessly with rising difficulty.
+Enemies: ninja grunts, zig-zag runners, shuriken-throwing archers (swipe their stars to block), armored samurai (3 HP, from stage 4), club-wielding brutes (2 HP, ground-shaking slams, from stage 4) and assassins who vanish in smoke and reappear behind you (from stage 6). Every stage brings more enemies (15 on stage 1, ~50 by stage 10, ~100 by stage 20) and more of them on the field at once (6, rising to 16).
+
+Bosses rotate every 5th stage and get tougher each time round:
+- **Oni Warlord** (stage 5, 20, ...): huge, slow, crushing club; summons grunts.
+- **Shogun General** (stage 10, 25, ...): telegraphed charging rush across the arena (dash or jump to dodge); summons samurai and archers.
+- **Shadow Master** (stage 15, 30, ...): teleports beside you mid-fight and conjures shadow clones.
+
+There are 4 times of day (Dusk, Moonlit, Sakura Dawn, Blood Moon), and stages go on endlessly with rising difficulty.
+
+Ads: a midgame ad plays at most every 3rd stage and never within 3 minutes of the previous ad (rewarded ads count).
 
 Progression: coins â†’ unlock and upgrade 5 weapons (5 levels each) + Vitality (extra hearts). Combos, multi-slice bonuses, air slices, 3-star results.
 
@@ -88,7 +97,7 @@ Serve the folder over HTTP (ES modules don't load from `file://`):
 python -m http.server 8010 --directory .
 ```
 Open http://localhost:8010/. Test switches: `?devads` simulates ads, `?muteAudio=true` simulates the platform mute.
-Dev-only switches (localhost only): `?test=play&stage=5`, `&near`, `&auto`, `&w=naginata`, `&sim=600`, `&dbg`.
+Dev-only switches (localhost only): `?test=play&stage=5`, `&spawn=shogun,brute`, `?test=storm`, `?test=finish&go`, `&near`, `&auto`, `&w=naginata`, `&sim=600`, `&dbg`.
 
 ## Upload to CrazyGames
 Run `build.ps1`. It creates `dist/ninja-arsenal.zip` (index.html + js/ + vendor/). Upload that zip in the Developer Portal and run the QA tool.

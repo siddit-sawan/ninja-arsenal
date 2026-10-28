@@ -65,7 +65,12 @@ const EDEF = {
   runner: { hp: 1, speed: 5.4, value: 7, h: 1.72, w: 0.36 },
   archer: { hp: 1, speed: 2.7, value: 9, h: 1.85, w: 0.38, ranged: true },
   samurai: { hp: 3, speed: 2.1, value: 16, h: 2.1, w: 0.46, armor: true },
-  oni: { hp: 30, speed: 1.3, value: 150, h: 4.3, w: 1.0, boss: true, dmg: 2 },
+  brute: { hp: 2, speed: 1.9, value: 14, h: 2.4, w: 0.55, reach: 2.0, wind: 1.0, heavy: true },
+  assassin: { hp: 1, speed: 4.4, value: 12, h: 1.72, w: 0.34, wind: 0.5, blink: true },
+  shade: { hp: 1, speed: 3.8, value: 3, h: 1.6, w: 0.32, wind: 0.6 },
+  oni: { hp: 30, speed: 1.3, value: 150, h: 4.3, w: 1.0, boss: true, dmg: 2, name: 'ONI WARLORD', slain: 'ONI SLAIN' },
+  shogun: { hp: 34, speed: 1.7, value: 220, h: 3.0, w: 0.75, boss: true, dmg: 2, reach: 2.6, name: 'SHOGUN GENERAL', slain: 'SHOGUN FALLS' },
+  shadow: { hp: 26, speed: 2.6, value: 240, h: 2.55, w: 0.5, boss: true, dmg: 1, reach: 2.0, wind: 0.6, name: 'SHADOW MASTER', slain: 'SHADOW BANISHED' },
   dummy: { hp: 1, speed: 0, value: 0, h: 1.9, w: 0.3, dummy: true },
 };
 
@@ -214,23 +219,27 @@ let hearts = 5, maxHearts = 5, score = 0, runCoins = 0, comboN = 0, comboT = 0, 
 let stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
 let spawnT = 0, killedCounted = 0, revived = false, bossE = null, shake = 0, timeScale = 1, slowT = 0, slowTo = 1, strokeKills = new Map();
 const cds = {}; WIDS.forEach(id => cds[id] = 0);
-let lastCoins = 0, resDoubled = false, adsWatchedThisRun = 0, playsSinceAd = 0;
+let lastCoins = 0, resDoubled = false, adsWatchedThisRun = 0, playsSinceAd = 0, lastAdAt = performance.now();
+const AD_EVERY_STAGES = 3, AD_GAP_MS = 180000;   // midgame ads: at most every 3rd stage, 3+ minutes apart
 const after = (t, fn) => timers.push({ t, fn });
 
+const BOSSES = ['oni', 'shogun', 'shadow'];   // every 5th stage, in rotation
 function makeStage(n) {
   const boss = n % 5 === 0;
-  const total = Math.min(10 + Math.floor(n * 2.6), 55) - (boss ? 4 : 0);
+  const total = Math.min(Math.round(12 + n * 3.2 + n * n * 0.06), 110) - (boss ? 4 : 0);
   const q = [];
   for (let i = 0; i < total; i++) {
     const w = [['grunt', 1]];
     if (n >= 2) w.push(['runner', 0.3 + 0.03 * n]);
     if (n >= 3) w.push(['archer', 0.22 + 0.02 * n]);
     if (n >= 4) w.push(['samurai', 0.18 + 0.03 * n]);
+    if (n >= 4) w.push(['brute', 0.1 + 0.025 * n]);
+    if (n >= 6) w.push(['assassin', 0.14 + 0.025 * n]);
     let r = Math.random() * w.reduce((s, x) => s + x[1], 0), kind = 'grunt';
     for (const [k, p] of w) { r -= p; if (r <= 0) { kind = k; break; } }
     q.push({ kind, gap: Math.max(0.35, 2.1 - n * 0.07) * rnd(0.55, 1.35) * (Math.random() < 0.18 + n * 0.01 ? 0.15 : 1) });
   }
-  if (boss) q.push({ kind: 'oni', gap: 2 });
+  if (boss) q.push({ kind: BOSSES[(n / 5 - 1) % BOSSES.length], gap: 2 });
   return { n, boss, queue: q, total: q.length, theme: boss ? 3 : (n - 1) % 3, speedMul: Math.min(1.6, 1 + 0.025 * (n - 1)) };
 }
 
@@ -242,7 +251,7 @@ function spawnEnemy(kind, x, z, minion = false, gate = null) {
   root.traverse(o => { if (o.isMesh) o.castShadow = true; });
   const e = { kind, d, root, P, hp: d.hp, maxHp: d.hp, x, z, speed: d.speed * stage.speedMul * rnd(0.9, 1.1), state: 'run', t: 0, ph: rnd(0, 6), atkT: 0,
     stagger: 0, s: root.scale.x, minion, holdR: rnd(9, 14), lastStroke: -1, sumT: 6, gate, y: 0, air: null, leapCD: rnd(1.5, 4) };
-  if (d.boss) { e.hp = e.maxHp = 30 + 8 * (stage.n / 5 - 1); bossE = e; $('bossBar').classList.remove('hidden'); updBoss(); banner('ONI WARLORD', 'BOSS'); sfx.roar(); music('boss'); shake = 0.6; }
+  if (d.boss) { e.hp = e.maxHp = d.hp + 8 * (stage.n / 5 - 1); e.blinkT = rnd(3, 4); bossE = e; $('bossName').textContent = d.name; $('bossBar').classList.remove('hidden'); updBoss(); banner(d.name, 'BOSS'); sfx.roar(); music('boss'); shake = 0.6; }
   root.position.set(x, 0, z); root.rotation.y = Math.atan2(-x, -z);
   scene.add(root); enemies.push(e);
   return e;
@@ -270,8 +279,8 @@ function animEnemy(e, dt) {
     rotTo(P.hips, -0.35, k); rotTo(P.armL, 0.6, k); rotTo(P.armR, 0.6, k); rotTo(P.legL, 0.3, k); rotTo(P.legR, -0.2, k);
     return;
   }
-  if (e.state === 'run') {
-    e.ph += dt * e.speed * (e.d.boss ? 1.6 : 2.3);
+  if (e.state === 'run' || e.state === 'charging') {
+    e.ph += dt * (e.state === 'charging' ? 15 : e.speed) * (e.d.boss ? 1.6 : 2.3);
     const s = Math.sin(e.ph), c = Math.cos(e.ph);
     P.legL.rotation.x = -s * 0.85; P.legR.rotation.x = s * 0.85;
     P.kneeL.rotation.x = Math.max(0, c) * 1.3; P.kneeR.rotation.x = Math.max(0, -c) * 1.3;
@@ -287,13 +296,28 @@ function animEnemy(e, dt) {
   P.hips.position.y += (RIG.hips.y - 0.03 - P.hips.position.y) * k;
   P.head.rotation.x = -0.05;
   rotTo(P.armL, -0.4, k); rotTo(P.elbowL, -1.0, k);
-  if (e.state === 'windup') { const f = Math.min(1, e.t / e.windDur); rotTo(P.armR, -2.9 * f - 0.4 * (1 - f), k); rotTo(P.elbowR, -0.4, k); rotTo(P.hips, -0.1, k); }
+  if (e.state === 'chargeWind') { rotTo(P.armR, -1.2, k); rotTo(P.elbowR, -0.3, k); rotTo(P.hips, 0.55, k); rotTo(P.legL, -0.7, k); rotTo(P.kneeL, 0.9, k); rotTo(P.legR, 0.5, k); rotTo(P.kneeR, 0.6, k); P.hips.position.y += (RIG.hips.y - 0.18 - P.hips.position.y) * k; }
+  else if (e.state === 'windup') { const f = Math.min(1, e.t / e.windDur); rotTo(P.armR, -2.9 * f - 0.4 * (1 - f), k); rotTo(P.elbowR, -0.4, k); rotTo(P.hips, -0.1, k); }
   else if (e.state === 'recover') { rotTo(P.armR, -0.15, 1 - Math.exp(-dt * 30)); rotTo(P.elbowR, -0.1, k); rotTo(P.hips, 0.4, k); }
   else if (e.state === 'throw') { const f = e.t / 0.45; rotTo(P.armR, f < 0.7 ? 1.4 : -1.7, f < 0.7 ? k : 1 - Math.exp(-dt * 30)); rotTo(P.elbowR, -0.5, k); }
   else { rotTo(P.armR, -0.6 + Math.sin(e.t * 2 + e.ph) * 0.05, k); rotTo(P.elbowR, -0.9, k); }
 }
 
-const reachOf = e => e.d.ranged ? e.holdR : (e.d.boss ? 3.0 : 1.5) + PLAYER_R;
+// vanish in smoke and reappear behind (or beside) the player, already winding up a strike
+function shadowStep(e) {
+  fx.dust(new V3(e.x, 0, e.z), 18, 1.3 * e.s); sfx.swish(0.7);
+  const f = new V3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw)), a = rnd(-1, 1), r = reachOf(e) - 0.3;
+  let x = player.pos.x - (f.x * Math.cos(a) - f.z * Math.sin(a)) * r, z = player.pos.z - (f.z * Math.cos(a) + f.x * Math.sin(a)) * r;
+  const R = Math.hypot(x, z), M = world.arenaR - 1.5; if (R > M) { x *= M / R; z *= M / R; }
+  e.x = x; e.z = z; e.gate = null; e.root.rotation.y = Math.atan2(player.pos.x - x, player.pos.z - z);
+  fx.dust(new V3(x, 0, z), 18, 1.3 * e.s);
+  e.state = 'windup'; e.t = 0; e.windDur = e.d.wind ?? 0.6; sfx.warn(); floater('!', headPos(e), 'warn');
+}
+function chargeWind(e, dx, dz) {
+  e.state = 'chargeWind'; e.t = 0; e.cdx = dx; e.cdz = dz;
+  sfx.warn(); floater('!!', headPos(e), 'warn'); shake = Math.max(shake, 0.2);
+}
+const reachOf = e => e.d.ranged ? e.holdR : (e.d.reach ?? (e.d.boss ? 3.0 : 1.5)) + PLAYER_R;
 function updEnemies(dt) {
   const px = player.pos.x, pz = player.pos.z;
   for (const e of enemies.slice()) {
@@ -326,6 +350,8 @@ function updEnemies(dt) {
       else {
         if (e.kind === 'runner' && !e.gate && dist > 4) { const w = Math.sin(e.t * 2.6 + e.ph) * 0.7; const ax = mx - mz * w, az = mz + mx * w, al = Math.hypot(ax, az); mx = ax / al; mz = az / al; }
         e.x += mx * e.speed * dt; e.z += mz * e.speed * dt;
+        if (d.blink && !d.boss && !e.gate && e.leapCD <= 0 && dist > 4 && dist < 14) { shadowStep(e); e.leapCD = rnd(4, 6.5); continue; }
+        if (e.kind === 'shogun' && e.leapCD <= 0 && dist > 4.5 && dist < 13) { chargeWind(e, dx, dz); e.leapCD = rnd(5, 7); }
         // runners (and the odd grunt) close the gap with a flying front flip into an attack
         if (!e.gate && e.leapCD <= 0 && ((e.kind === 'runner' && dist > 3.5 && dist < 7.5) || (e.kind === 'grunt' && dist > 5 && dist < 8 && Math.random() < dt * 0.6))) {
           leap(e, px - dx * (reachOf(e) - 0.2), pz - dz * (reachOf(e) - 0.2), 1.7, 0.62, 1, true); e.leapCD = rnd(4, 7);
@@ -346,15 +372,22 @@ function updEnemies(dt) {
         if (e.atkT <= 0) {
           e.t = 0;
           if (e.state === 'aim') e.state = 'throw';
-          else { e.state = 'windup'; e.windDur = d.boss ? 1.0 : 0.72; sfx.warn(); floater('!', headPos(e), 'warn'); }
+          else { e.state = 'windup'; e.windDur = d.wind ?? (d.boss ? 1.0 : 0.72); sfx.warn(); floater('!', headPos(e), 'warn'); }
         }
       } else if (e.state === 'windup') {
         if (e.t >= e.windDur) {
           e.state = 'recover'; e.t = 0; sfx.swish(0.6);
-          if (d.boss) { shake = Math.max(shake, 0.8); sfx.thud(2); }
+          if (d.boss || d.heavy) { shake = Math.max(shake, d.boss ? 0.8 : 0.5); sfx.thud(d.boss ? 2 : 1.2); if (d.heavy) fx.dust(new V3(e.x + dx * 1.4, 0, e.z + dz * 1.4), 14, 1.2); }
           if (dist <= reachOf(e) + 0.75 && player.dashT <= 0 && player.y < 0.9) hurtPlayer(d.dmg || 1);
           else { floater('DODGED', headPos(e), ''); if (tut) tut.flags.dodge = true; }
         }
+      } else if (e.state === 'chargeWind') {
+        if (e.t >= 0.75) { e.state = 'charging'; e.t = 0; e.hitDone = false; sfx.swish(1.2); shake = Math.max(shake, 0.3); }
+      } else if (e.state === 'charging') {   // a straight, unstoppable rush along the telegraphed line
+        e.x += e.cdx * 15 * dt; e.z += e.cdz * 15 * dt;
+        if (Math.random() < dt * 30) fx.dust(new V3(e.x, 0, e.z), 2, 0.8);
+        if (!e.hitDone && dist < d.w + PLAYER_R + 0.6) { e.hitDone = true; if (player.dashT <= 0 && player.y < 0.9) hurtPlayer(d.dmg || 1); else floater('DODGED', headPos(e), ''); }
+        if (e.t >= 0.55) { e.state = 'recover'; e.t = 0; if (!e.hitDone && tut) tut.flags.dodge = true; }
       } else if (e.state === 'recover') {
         if (e.t >= 0.45) { e.state = 'ready'; e.atkT = rnd(0.8, 1.4) * (d.boss ? 1.3 : 1); }
       } else if (e.state === 'throw') {
@@ -374,14 +407,16 @@ function updEnemies(dt) {
     }
     if (d.boss) {
       e.sumT -= dt;
-      if (e.sumT <= 0 && enemies.length < 7) {
-        e.sumT = rnd(7, 9);
-        for (const s of [-1, 1]) { const a = Math.atan2(e.x - px, e.z - pz) + s * 0.7; spawnEnemy('grunt', e.x + Math.sin(a) * 2.5, e.z + Math.cos(a) * 2.5, true); }
-        sfx.roar();
+      if (e.sumT <= 0 && enemies.length < 8) {   // each boss calls its own help
+        e.sumT = e.kind === 'shadow' ? rnd(8, 10) : rnd(7, 9);
+        const call = e.kind === 'shogun' ? ['samurai', 'archer'] : e.kind === 'shadow' ? ['shade', 'shade'] : ['grunt', 'grunt'];
+        call.forEach((k, i) => { const a = Math.atan2(e.x - px, e.z - pz) + (i ? 0.7 : -0.7), m = spawnEnemy(k, e.x + Math.sin(a) * 2.5, e.z + Math.cos(a) * 2.5, true); if (k === 'shade') fx.dust(new V3(m.x, 0, m.z), 16, 1.2); });
+        if (e.kind === 'shadow') sfx.swish(0.8); else sfx.roar();
       }
+      if (e.kind === 'shadow' && (e.state === 'run' || e.state === 'ready')) { e.blinkT -= dt; if (e.blinkT <= 0) { e.blinkT = rnd(3.5, 5); shadowStep(e); } }
     }
     // face the player (or the gate while entering)
-    const want = e.gate ? Math.atan2(e.gate.x - e.x, e.gate.z - e.z) : Math.atan2(px - e.x, pz - e.z);
+    const want = e.gate ? Math.atan2(e.gate.x - e.x, e.gate.z - e.z) : e.state === 'charging' || e.state === 'chargeWind' ? Math.atan2(e.cdx, e.cdz) : Math.atan2(px - e.x, pz - e.z);
     let da = want - e.root.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da));
     e.root.rotation.y += da * Math.min(1, dt * 8);
     animEnemy(e, dt);
@@ -912,26 +947,26 @@ function updSpawner(dt) {
   if (!stage.queue.length) return;
   spawnT -= dt;
   const head = stage.queue[0];
-  const cap = 5 + Math.floor(stage.n / 3);
+  const cap = Math.min(16, 6 + Math.floor(stage.n / 2));   // more on the field at once as stages climb
   if (spawnT > 0 || enemies.length >= cap) return;
-  if (head.kind === 'oni' && enemies.length > 2) return;
+  if (EDEF[head.kind].boss && enemies.length > 2) return;
   stage.queue.shift();
   if (DEV && QS.has('near')) { const a = rnd(-0.6, 0.6) + player.yaw; const nd = +QS.get('near') || 9; spawnEnemy(head.kind, player.pos.x - Math.sin(a) * nd, player.pos.z - Math.cos(a) * nd); }
   else {
-    if (['grunt', 'runner', 'archer'].includes(head.kind) && Math.random() < 0.5) {
+    if (['grunt', 'runner', 'archer', 'assassin'].includes(head.kind) && Math.random() < 0.5) {
       const a = rnd(0, Math.PI * 2), e = spawnEnemy(head.kind, Math.sin(a) * (ARENA_R + 2.6), -Math.cos(a) * (ARENA_R + 2.6));
       leap(e, Math.sin(a) * (ARENA_R - 3.5), -Math.cos(a) * (ARENA_R - 3.5), 3.3, 1.05, 1);
       spawnT = stage.queue.length ? stage.queue[0].gap : 0;
       return;
     }
-    const g = world.gates[Math.floor(Math.random() * world.gates.length)], j = head.kind === 'oni' ? 0 : rnd(-2, 2), k = rnd(-1.5, 1.5);
+    const g = world.gates[Math.floor(Math.random() * world.gates.length)], j = EDEF[head.kind].boss ? 0 : rnd(-2, 2), k = rnd(-1.5, 1.5);
     spawnEnemy(head.kind, g.ox + g.tx * j + g.dx * k, g.oz + g.tz * j + g.dz * k, false, { x: g.ix + g.tx * j * 0.6, z: g.iz + g.tz * j * 0.6 });
   }
   spawnT = stage.queue.length ? stage.queue[0].gap : 0;
 }
 function bossDown(e) {
   bossE = null; $('bossBar').classList.add('hidden');
-  slowmo(0.15, 1.6); banner('ONI SLAIN', 'VICTORY'); happytime(); music('battle');
+  slowmo(0.15, 1.6); banner(e.d.slain, 'VICTORY'); happytime(); music('battle');
   for (const o of enemies.slice()) if (o.minion) killEnemy(o, new THREE.Plane().setFromNormalAndCoplanarPoint(new V3().randomDirection(), bodyCenter(o)), UP.clone(), { stroke: -3 });
 }
 function checkClear() {
@@ -987,7 +1022,7 @@ function pause() {
 }
 function resume() { if (state !== 'paused') return; state = 'play'; showLayer(null); gameplay(true); updLockUI(); }
 async function playStage(n, withAd) {
-  if (withAd && adsOK() && playsSinceAd >= 1) { await runAd('midgame'); playsSinceAd = 0; }
+  if (withAd && adsOK() && playsSinceAd >= AD_EVERY_STAGES && performance.now() - lastAdAt > AD_GAP_MS) { await runAd('midgame'); playsSinceAd = 0; lastAdAt = performance.now(); }
   startStage(n);
 }
 function toMenu() {
@@ -1326,7 +1361,7 @@ click('wdBuy', () => {
 });
 click('wdTry', async () => {
   const id = arsSel; if (save.w[id]) return;
-  const ok = await runAd('rewarded');
+  const ok = await runAd('rewarded'); lastAdAt = performance.now();
   if (ok) { trial = id; toast(`${WEAP[id].name} unlocked for your next stage!`); }
   renderArsenal();
 });
@@ -1366,13 +1401,13 @@ click('resNext', () => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, t
 click('resMenu', toMenu);
 click('resDouble', async () => {
   if (resDoubled) return;
-  const ok = await runAd('rewarded');
+  const ok = await runAd('rewarded'); lastAdAt = performance.now();
   if (ok) { resDoubled = true; save.coins += lastCoins; persist(); $('resCoins').innerHTML = `<span class="coinI"></span>+${lastCoins * 2}`; sfx.coin(); toast('Coins doubled!'); }
   updAdUI(); updCoins();
 });
 click('reviveBtn', async () => {
   if (revived) return;
-  const ok = await runAd('rewarded');
+  const ok = await runAd('rewarded'); lastAdAt = performance.now();
   if (ok) revive(); else updAdUI();
 });
 click('retryBtn', () => { bankRunCoins(); playStage(stage.n, true); });
@@ -1782,6 +1817,7 @@ async function boot() {
   const test = DEV ? QS.get('test') : null;
   if (DEV && QS.get('w') && WEAP[QS.get('w')]) { trial = QS.get('w'); }
   if (test === 'play') startStage(+(QS.get('stage') || 1));
+  if (test === 'play' && QS.get('spawn')) after(0.4, () => QS.get('spawn').split(',').forEach((k, i, all) => { const a = player.yaw + (i - (all.length - 1) / 2) * 0.5; spawnEnemy(k, player.pos.x - Math.sin(a) * 6, player.pos.z - Math.cos(a) * 6); }));   // dev: e.g. &spawn=shogun,brute
   if (test === 'arsenal') $('arsenalBtn').click();
   if (test === 'storm') { startStage(+(QS.get('stage') || 2)); after(+(QS.get('at') || 1.6), () => { ult = 100; storm(); }); }   // dev: fire Blade Storm into the first wave
   if (test === 'finish') {   // dev: a crippled ninja in front of you; &go runs the finisher

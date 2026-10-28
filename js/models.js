@@ -18,6 +18,11 @@ const PAL = {
   archer: { cloth: 0x201e1b, trim: 0x6a5a42, skin: 0x2c2722, eye: 0xf2e8d2, wrap: 0x2a2620 },
   samurai: { cloth: 0x1a1816, trim: 0x8a1812, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2e2a27 },
   player: { cloth: 0x0f0e0e, trim: 0x2a2624, skin: 0x1e1b19, eye: 0xf6eedc, wrap: 0x1a1817 },
+  brute: { cloth: 0x1d1a17, trim: 0x6b4a22, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2b2622 },
+  assassin: { cloth: 0x141218, trim: 0x5b2a7a, skin: 0x221d26, eye: 0xd9b8ff, wrap: 0x221d29 },
+  shogun: { cloth: 0x18140f, trim: 0xb8902a, skin: 0x2a2520, eye: 0xffd27a, wrap: 0x2a2418 },
+  shadow: { cloth: 0x0a090c, trim: 0x6a2fb0, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x141218 },
+  shade: { cloth: 0x0c0b10, trim: 0x4a2380, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x16131c },
 };
 
 function blade(len, w, curve = 0.05) {
@@ -111,23 +116,64 @@ export function buildEnemy(kind) {
     head.add(at(part(cyl(0.02, 0.36, 0.13, 24), 0x7a6a50, 'body', 'wood'), 0, 0.31, 0.04));                     // straw hat
     root.getObjectByName('torso').add(at(part(box(0.2, 0.26, 0.09), 0x2a221a, 'body', 'wood'), 0, 0.22, -0.28)); // quiver pack
   } else if (kind === 'samurai') {
-    const torso = root.getObjectByName('torso'), head = root.getObjectByName('head');
-    torso.add(at(part(lathe([[0, 0], [0.18, 0], [0.198, 0.12], [0.204, 0.24], [0.17, 0.33], [0, 0.35]], 20).scale(1, 1, 1.1), 0x2a2624, 'body', 'wood'), 0, 0.0, -0.03));   // do (chest plate)
-    for (let i = 0; i < 3; i++) torso.add(at(part(box(0.5 - i * 0.02, 0.05, 0.4), i % 2 ? 0x6e1410 : 0x1e1c1a, 'body', 'wood'), 0, -0.04 - i * 0.07, -0.01));   // kusazuri
-    for (const sx of [-1, 1]) torso.add(at(part(box(0.15, 0.04, 0.2), 0x2a2624, 'body', 'wood'), 0.26 * sx, 0.36, -0.06, 0, 0, -0.5 * sx));            // sode
-    head.add(at(part(new THREE.SphereGeometry(0.135, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 1, 1.1), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.05));   // kabuto
-    head.add(at(part(cyl(0.2, 0.18, 0.025, 24), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.02, -0.25, 0, 0));
-    for (const sx of [-1, 1]) head.add(at(part(box(0.03, 0.22, 0.01).translate(0, 0.11, 0), 0xa89468, 'metal', 'metal'), sx * 0.03, 0.3, 0.15, -0.25, 0, -sx * 0.55));   // kuwagata horns
-    head.add(at(part(box(0.14, 0.07, 0.04), 0x3a1010), 0, 0.11, 0.155));                                                                             // menpo
+    samuraiArmor(root, 0x2a2624, 0x6e1410, 0xa89468);
     const yari = new THREE.Group();                                                                        // spearman's yari
     yari.add(at(part(cyl(0.018, 0.02, 2.1, 10), 0x2a1e14, 'body', 'wood'), 0, 0.45, 0));
     yari.add(at(part(cyl(0.026, 0.022, 0.08, 10), 0x4a4440, 'metal', 'metal'), 0, 1.52, 0));
     yari.add(at(part(new THREE.OctahedronGeometry(0.05, 0).scale(0.6, 4.2, 0.22), 0xc8cdd2, 'metal', 'metal'), 0, 1.76, 0));
     yari.rotation.x = Math.PI / 2 + 0.25; handR.add(yari);
     scale = 1.14;
+  } else if (kind === 'brute') {          // heavy club-wielder: big, slow, takes two hits
+    const torso = root.getObjectByName('torso');
+    for (const sx of [-1, 1]) torso.add(at(part(sph(0.12).scale(1.2, 0.7, 1.1), 0x3a2a1a, 'body', 'wood'), 0.24 * sx, 0.36, -0.04));   // lacquered shoulder guards
+    const c = kanabo(0.8); c.rotation.x = Math.PI / 2 + 0.2; handR.add(c);
+    scale = 1.3;
+  } else if (kind === 'assassin') {       // shadow-stepping blade dancer: twin tanto, long scarf
+    for (const h of [handR, handL]) { const t = new THREE.Group(); t.add(part(cyl(0.013, 0.013, 0.1, 6), 0x1a1420), at(part(blade(0.26, 0.026, 0.02), 0xc8c2d6, 'metal', 'metal'), 0, 0.05, 0)); t.rotation.x = Math.PI / 2; h.add(t); }
+    const rib = pivot('scarf', 0, 0.2, -0.08); root.getObjectByName('head').add(rib);
+    for (const sx of [-1, 1]) rib.add(at(part(box(0.03, 0.6, 0.008).translate(0, -0.3, 0), PAL.assassin.trim), sx * 0.03, 0, 0, 0.5, sx * 0.15, sx * 0.14));
+    scale = 0.96;
+  } else if (kind === 'shogun') {         // boss: gilded general with a great crest and an oversized blade
+    const head = root.getObjectByName('head'), torso = root.getObjectByName('torso');
+    samuraiArmor(root, 0x231d14, 0xb8902a, 0xd9b048);
+    head.add(at(part(new THREE.CircleGeometry(0.11, 24, 0, Math.PI).scale(1, 1.2, 1), 0xd9b048, 'metal', 'metal'), 0, 0.36, 0.1, -0.2, 0, 0));   // maedate sun crest
+    for (const sx of [-1, 1]) torso.add(at(part(box(0.06, 0.9, 0.012).translate(0, -0.45, 0), 0x6e1410), sx * 0.12, 0.34, -0.2, 0.08, 0, sx * 0.06));   // banner sashes
+    const k = enemyKatana(1.15); k.rotation.x = Math.PI / 2 + 0.2; handR.add(k);
+    scale = 1.6;
+  } else if (kind === 'shadow' || kind === 'shade') {   // boss (and its clones): void-black ninja, violet glow
+    const k = enemyKatana(0.8); k.rotation.x = Math.PI / 2 + 0.2; handR.add(k);
+    if (kind === 'shadow') {
+      const k2 = enemyKatana(0.7); k2.rotation.x = Math.PI / 2 + 0.2; handL.add(k2);
+      const rib = pivot('scarf', 0, 0.2, -0.08); root.getObjectByName('head').add(rib);
+      for (const sx of [-1, 1]) rib.add(at(part(box(0.04, 1.0, 0.008).translate(0, -0.5, 0), PAL.shadow.trim), sx * 0.035, 0, 0, 0.6, sx * 0.15, sx * 0.16));
+    }
+    scale = kind === 'shadow' ? 1.35 : 0.9;
   }
   root.scale.setScalar(scale);
   return root;
+}
+
+// samurai lamellar kit: do (chest plate), kusazuri skirt, sode shoulder plates, kabuto helmet, horns, menpo
+function samuraiArmor(root, plate, lace, gold) {
+  const torso = root.getObjectByName('torso'), head = root.getObjectByName('head');
+  torso.add(at(part(lathe([[0, 0], [0.18, 0], [0.198, 0.12], [0.204, 0.24], [0.17, 0.33], [0, 0.35]], 20).scale(1, 1, 1.1), plate, 'body', 'wood'), 0, 0.0, -0.03));
+  for (let i = 0; i < 3; i++) torso.add(at(part(box(0.5 - i * 0.02, 0.05, 0.4), i % 2 ? lace : 0x1e1c1a, 'body', 'wood'), 0, -0.04 - i * 0.07, -0.01));
+  for (const sx of [-1, 1]) torso.add(at(part(box(0.15, 0.04, 0.2), plate, 'body', 'wood'), 0.26 * sx, 0.36, -0.06, 0, 0, -0.5 * sx));
+  head.add(at(part(new THREE.SphereGeometry(0.135, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 1, 1.1), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.05));
+  head.add(at(part(cyl(0.2, 0.18, 0.025, 24), 0x1a1a1e, 'metal', 'metal'), 0, 0.2, 0.02, -0.25, 0, 0));
+  for (const sx of [-1, 1]) head.add(at(part(box(0.03, 0.22, 0.01).translate(0, 0.11, 0), gold, 'metal', 'metal'), sx * 0.03, 0.3, 0.15, -0.25, 0, -sx * 0.55));
+  head.add(at(part(box(0.14, 0.07, 0.04), 0x3a1010), 0, 0.11, 0.155));
+}
+// studded kanabo war club
+function kanabo(len = 1) {
+  const club = new THREE.Group();
+  club.add(at(part(cyl(0.035, 0.035, 0.3, 10), 0x3a2414, 'body', 'wood'), 0, 0, 0));
+  club.add(at(part(cyl(0.11 * len, 0.06, 0.95 * len, 14), 0x2b2b30, 'metal', 'metal'), 0, 0.15 + 0.475 * len, 0));
+  for (let i = 0; i < 12; i++) {
+    const a = (i % 4) * Math.PI / 2 + (i > 3 && i < 8 ? Math.PI / 4 : 0), y = 0.15 + (0.2 + Math.floor(i / 4) * 0.27) * len, r = 0.1 * len;
+    club.add(at(part(new THREE.ConeGeometry(0.03 * len, 0.07 * len, 8), 0xc0c4c8, 'metal', 'metal'), Math.cos(a) * r, y, Math.sin(a) * r, 0, 0, 0).rotateOnAxis(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), -Math.PI / 2));
+  }
+  return club;
 }
 
 function buildOni() {
@@ -146,14 +192,7 @@ function buildOni() {
     const el = root.getObjectByName(sx < 0 ? 'elbowL' : 'elbowR'), wr = root.getObjectByName(sx < 0 ? 'handL' : 'handR').position;
     el.add(at(part(cyl(0.055, 0.055, 0.06, 18), 0x6a5a40, 'metal', 'metal'), wr.x * 0.6, wr.y * 0.6, wr.z * 0.6, 0, 0, Math.atan2(wr.x, -wr.y)));   // gold bracer
   }
-  // kanabo club
-  const club = new THREE.Group();
-  club.add(at(part(cyl(0.035, 0.035, 0.3, 10), 0x3a2414, 'body', 'wood'), 0, 0, 0));
-  club.add(at(part(cyl(0.11, 0.06, 0.95, 14), 0x2b2b30, 'metal', 'metal'), 0, 0.6, 0));
-  for (let i = 0; i < 12; i++) {
-    const a = (i % 4) * Math.PI / 2 + (i > 3 && i < 8 ? Math.PI / 4 : 0), y = 0.35 + Math.floor(i / 4) * 0.27;
-    club.add(at(part(new THREE.ConeGeometry(0.03, 0.07, 8), 0xc0c4c8, 'metal', 'metal'), Math.cos(a) * 0.1, y, Math.sin(a) * 0.1, 0, 0, 0).rotateOnAxis(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), -Math.PI / 2));
-  }
+  const club = kanabo();
   club.rotation.x = Math.PI / 2 + 0.2;
   root.getObjectByName('handR').add(club);
   root.scale.setScalar(2.1);
