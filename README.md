@@ -38,10 +38,18 @@ Melee enemies wind up before striking (red `!`). Step out of range or dash to do
 - **Air kills:** kills while airborne give **AERIAL KILL** bonus coins and slow motion.
 - **Dash:** zooms the camera with speed lines. Landing kicks up dust and dips the camera.
 - **Hits:** kills briefly freeze the action for impact.
+- **Animation:** the hero breathes in a guard stance at rest, counter-swings the shoulders while running, leans into strafes, tucks on the way up and reaches for the ground on the way down, absorbs landings in a crouch and flinches when hit. Slashes whip from the hips with an eased follow-through, and weapon swaps draw the new blade. In first person the weapon bobs with the stride, dips on landing and rises from below on a swap.
+- **Enemy animation:** enemies breathe and shift their weight, counter-rotate while running, coil back before a strike (with a tremor just before it lands) and lunge into it, snap back with whiplash when hit, crouch after leaping, and crippled ones clutch their wounds and keep trying to rise.
 - **Enemies:** half of the light ninjas vault over the arena wall with a flip. Runners (and sometimes grunts) close in with a flying flip into an attack, and archers backflip away if you rush them.
 
 ## Wounds and finishers
-A killing blow that only clips an enemy's legs (a low cut) or an arm (a glancing side cut) cripples them instead: they drop to their knees, bleeding and unable to attack. Walk up and press **Q** (or tap **FINISH**) for a slow-motion execution that pays bonus coins, score and Storm charge. Any other hit kills a crippled enemy outright; left alone, they bleed out after 20 s. Bosses and training dummies can't be crippled.
+A killing blow that only clips an enemy's legs (a low cut) or an arm (a glancing side cut) cripples them instead: they drop to their knees, bleeding and unable to attack. Walk up and press **Q** (or tap **FINISH**) for a slow-motion execution that pays bonus coins, score and Storm charge. There are four, picked at random (never the same twice in a row): **Kaishaku** (overhead beheading), **Iaigiri** (crouched quick-draw that dashes past; he falls a beat later), **Kesagiri** (diagonal shoulder-to-hip cleave) and **Jumonji** (two crossing cuts burn in, then he falls apart in four). **Aerial finishers:** jump (or flip) and press **Q** / **FINISH** while airborne to finish a crippled enemy from up to 7.5 m away (twice the ground range). They pay double coins, +500 score and more Storm charge. Three play at random: **Hien** (front flip to the top of the arc, then a straight dive that splits him in two), **Raijin Otoshi** (high backflip, then a corkscrew fall that carves three cuts; he falls in four pieces) and **Tengu Gaeshi** (vault over him upside down, cutting on the way past; he falls at the click of the sheath). Any other hit kills a crippled enemy outright; left alone, they bleed out after 20 s. Bosses and training dummies can't be crippled.
+
+## Blade Storm
+When the Storm gauge is full, press **Q** (or tap STORM) for a cutscene: your ninja kneels into a draw stance, the blade flashes out and every enemy in range is marked with glowing cut lines. He holds the follow-through while they stand frozen, then sheathes his sword and they all fall apart on the click.
+
+## Playable ninja
+Pick your ninja from **Ninja** on the main menu (coins unlock them): **Kage** (balanced, free), **Hana** the kunoichi (+15% run speed, dash recharges 35% faster, 900), **Tetsu** the ronin (+1 heart, 5% slower, 1,800) and **Raiden** in the oni mask (Storm charges 30% faster, 3,200).
 
 ## Camera modes
 Press **C** (or the camera button, or Settings â†’ Camera) to switch views. The choice is saved.
@@ -67,7 +75,7 @@ Each weapon shows Power, Range, and Speed with exact values, plus green previews
 | 5 | Naginata | swipe | One huge edge-to-edge sweep per stroke |
 | Q | Blade Storm | button / Q / Space | Ultimate: slow motion, every enemy on screen is sliced |
 
-Enemies: ninja grunts, zig-zag runners, shuriken-throwing archers (swipe their stars to block), armored samurai (3 HP, from stage 4), club-wielding brutes (2 HP, ground-shaking slams, from stage 4) and assassins who vanish in smoke and reappear behind you (from stage 6). Every stage brings more enemies (15 on stage 1, ~50 by stage 10, ~100 by stage 20) and more of them on the field at once (6, rising to 16).
+Enemies: ninja grunts, zig-zag runners, shuriken-throwing archers (swipe their stars to block), armored samurai (3 HP, from stage 4), club-wielding brutes (2 HP, ground-shaking slams, from stage 14) and assassins who vanish in smoke and reappear behind you (from stage 24). The first three types arrive on stages 2-4; every later one comes at least 10 stages after the previous. Each type unlocks on its stage with a NEW ENEMY banner and a tip, is guaranteed a few early appearances that stage, and then keeps showing up in every later stage in growing numbers. Every stage brings more enemies (15 on stage 1, ~50 by stage 10, ~100 by stage 20) and more of them on the field at once (6, rising to 16).
 
 Bosses rotate every 5th stage and get tougher each time round:
 - **Oni Warlord** (stage 5, 20, ...): huge, slow, crushing club; summons grunts.

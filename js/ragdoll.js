@@ -361,7 +361,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
   const MAX_DOLLS = 34, MAX_RIGIDS = 60;
   S.update = (dt) => {
     thudCD -= dt;
-    acc = Math.min(acc + dt, H * 6);
+    acc = Math.min(acc + dt, H * 4);   // under ~30 fps let ragdolls run slow rather than pile up substeps (spiral of lag)
     const awake = S.dolls.filter(d => !d.asleep);
     let steps = 0;
     const moves = new Map();

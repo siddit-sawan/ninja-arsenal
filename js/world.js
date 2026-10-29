@@ -190,7 +190,8 @@ export function buildWorld(scene, renderer, quality) {
       leaves.setMatrixAt(li, dm.matrix); leaves.setColorAt(li++, col.setHSL(0.08, 0.06, rnd(0.06, 0.2)));
     }
   }
-  stalks.castShadow = leaves.castShadow = true; stalks.receiveShadow = leaves.receiveShadow = true;
+  // bamboo stands outside the sun's shadow frustum (±30 around the arena), so casting/receiving only costs a shadow pass of ~3000 instances
+  stalks.castShadow = leaves.castShadow = false; stalks.receiveShadow = leaves.receiveShadow = false;
   scene.add(stalks, leaves);
 
   // ---------- sakura trees just outside the wall, between the gates

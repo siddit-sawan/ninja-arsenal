@@ -18,6 +18,10 @@ const PAL = {
   archer: { cloth: 0x201e1b, trim: 0x6a5a42, skin: 0x2c2722, eye: 0xf2e8d2, wrap: 0x2a2620 },
   samurai: { cloth: 0x1a1816, trim: 0x8a1812, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2e2a27 },
   player: { cloth: 0x0f0e0e, trim: 0x2a2624, skin: 0x1e1b19, eye: 0xf6eedc, wrap: 0x1a1817 },
+  kage: { cloth: 0x0f0e0e, trim: 0x2a2624, skin: 0x1e1b19, eye: 0xf6eedc, wrap: 0x1a1817, ribbon: 0xb01e18 },
+  hana: { cloth: 0x16121a, trim: 0x7a3aa0, skin: 0x1e1a20, eye: 0xf6eedc, wrap: 0x221c28, ribbon: 0xe8dcc8 },
+  tetsu: { cloth: 0x1a1612, trim: 0x8a6a3a, skin: 0x221d18, eye: 0xf6eedc, wrap: 0x2a241c, ribbon: 0x6b4a22 },
+  raiden: { cloth: 0x120f0d, trim: 0xc8a040, skin: 0x1e1b19, eye: 0xffd27a, wrap: 0x1e1a16, ribbon: 0xc8a040 },
   brute: { cloth: 0x1d1a17, trim: 0x6b4a22, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2b2622 },
   assassin: { cloth: 0x141218, trim: 0x5b2a7a, skin: 0x221d26, eye: 0xd9b8ff, wrap: 0x221d29 },
   shogun: { cloth: 0x18140f, trim: 0xb8902a, skin: 0x2a2520, eye: 0xffd27a, wrap: 0x2a2418 },
@@ -90,15 +94,7 @@ export function buildEnemy(kind) {
   let root, scale = 1;
   if (kind === 'oni') return buildOni();
   if (kind === 'dummy') return buildDummy();
-  if (kind === 'player') {   // the hero, shown in third-person views (never sliced)
-    const r = ninja('player'), head = r.getObjectByName('head'), torso = r.getObjectByName('torso');
-    const rib = pivot('ribbon', 0, 0.225, -0.075); head.add(rib);                                       // long flowing headband tails
-    for (const sx of [-1, 1]) rib.add(at(part(box(0.034, 0.85, 0.008).translate(0, -0.425, 0), 0xb01e18), sx * 0.035, 0, 0, 0, sx * 0.15, sx * 0.16));
-    head.add(at(part(sph(0.045).scale(1, 1.35, 1), 0x0e0d0c), 0, 0.31, -0.04, -0.5, 0, 0));          // topknot
-    torso.add(at(part(cyl(0.022, 0.026, 0.9, 12), 0x0c0b0a, 'body', 'wood'), -0.06, 0.24, -0.25, 0, 0, 0.78));   // scabbard across the back
-    torso.add(at(part(cyl(0.05, 0.05, 0.015, 16), 0x3a3430, 'metal', 'metal'), 0.22, 0.52, -0.25, 0, 0, 0.78));
-    return r;
-  }
+  if (kind === 'player') return buildPlayer('kage');
   root = ninja(kind);
   const handR = root.getObjectByName('handR'), handL = root.getObjectByName('handL');
   if (kind === 'grunt') {
@@ -174,6 +170,31 @@ function kanabo(len = 1) {
     club.add(at(part(new THREE.ConeGeometry(0.03 * len, 0.07 * len, 8), 0xc0c4c8, 'metal', 'metal'), Math.cos(a) * r, y, Math.sin(a) * r, 0, 0, 0).rotateOnAxis(new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), -Math.PI / 2));
   }
   return club;
+}
+
+// Playable heroes (third-person views; never sliced). Each keeps the 'ribbon' pivot the animation drives.
+export function buildPlayer(id = 'kage') {
+  const r = ninja(PAL[id] ? id : 'kage'), head = r.getObjectByName('head'), torso = r.getObjectByName('torso'), c = PAL[id] || PAL.kage;
+  const rib = pivot('ribbon', 0, 0.225, -0.075); head.add(rib);                                         // flowing headband / scarf tails
+  const ribLen = id === 'hana' ? 1.0 : id === 'tetsu' ? 0.5 : 0.85;
+  for (const sx of [-1, 1]) rib.add(at(part(box(id === 'hana' ? 0.05 : 0.034, ribLen, 0.008).translate(0, -ribLen / 2, 0), c.ribbon), sx * 0.035, 0, 0, 0, sx * 0.15, sx * 0.16));
+  torso.add(at(part(cyl(0.022, 0.026, 0.9, 12), 0x0c0b0a, 'body', 'wood'), -0.06, 0.24, -0.25, 0, 0, 0.78));   // scabbard across the back
+  torso.add(at(part(cyl(0.05, 0.05, 0.015, 16), c.trim, 'metal', 'metal'), 0.22, 0.52, -0.25, 0, 0, 0.78));
+  if (id === 'kage') head.add(at(part(sph(0.045).scale(1, 1.35, 1), 0x0e0d0c), 0, 0.31, -0.04, -0.5, 0, 0));   // topknot
+  if (id === 'hana') {   // kunoichi: hair bun with a gold pin, long pale scarf
+    head.add(at(part(sph(0.06).scale(1.1, 0.9, 1), 0x0e0c10), 0, 0.27, -0.08));
+    head.add(at(part(cyl(0.006, 0.006, 0.2, 6), 0xc8a040, 'metal', 'metal'), 0, 0.29, -0.08, 0, 0, 1.2));
+  }
+  if (id === 'tetsu') {   // ronin: wide straw hat and one lacquered shoulder guard
+    head.add(at(part(cyl(0.02, 0.4, 0.14, 24), 0x8a7650, 'body', 'wood'), 0, 0.31, 0.04));
+    torso.add(at(part(sph(0.12).scale(1.2, 0.7, 1.1), 0x3a2a1a, 'body', 'wood'), -0.24, 0.36, -0.04));
+  }
+  if (id === 'raiden') {   // red oni half-mask with gilded horns
+    head.add(at(part(sph(0.1, 20, 14, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.65).scale(1.0, 0.9, 0.62), 0x9c1a14), 0, 0.16, 0.1));   // mask over the lower face
+    for (const sx of [-1, 1]) head.add(at(part(new THREE.ConeGeometry(0.012, 0.035, 8), 0xf1e6c8, 'body', 'bone'), 0.03 * sx, 0.07, 0.155, Math.PI, 0, 0));   // fangs
+    for (const sx of [-1, 1]) head.add(at(part(new THREE.ConeGeometry(0.018, 0.09, 10), 0xc8a040, 'metal', 'metal'), 0.05 * sx, 0.3, 0.06, -0.2, 0, -0.35 * sx));
+  }
+  return r;
 }
 
 function buildOni() {

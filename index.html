@@ -62,7 +62,15 @@ button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}
 #wdLvl{display:flex;gap:6px;margin:4px 0}
 #wdLvl s{flex:1;height:6px;border-radius:3px;background:#ffffff1c;text-decoration:none}#wdLvl s.on{background:var(--gold)}
 .dBtns{display:flex;gap:10px;flex-wrap:wrap}.dBtns .btn{min-width:0;flex:1}
-#arsBack,#setBack{position:fixed;top:max(14px,env(safe-area-inset-top));left:16px;z-index:7}
+#chars{flex-direction:row;align-items:flex-end;justify-content:space-between;gap:16px;padding:70px max(16px,3vw) max(16px,4vh)}
+#chList{width:min(240px,34vw);padding:12px;display:flex;flex-direction:column;gap:8px;align-self:center}
+#chDetail{width:min(300px,44vw);padding:18px;display:flex;flex-direction:column;gap:6px}
+#chDetail small{letter-spacing:.2em;text-transform:uppercase;opacity:.7}
+#chDetail b{font-size:30px;letter-spacing:.08em}
+#chDetail p{margin:4px 0 10px;line-height:1.4}
+#chDetail .btn{min-width:0}
+@media (max-width:640px){#chars{flex-direction:column;align-items:stretch;justify-content:flex-end}#chList{flex-direction:row;width:auto;align-self:stretch;overflow-x:auto}#chDetail{width:auto}}
+#arsBack,#setBack,#chBack{position:fixed;top:max(14px,env(safe-area-inset-top));left:16px;z-index:7}
 /* settings */
 #settings .panel{padding:24px;width:min(420px,100%);display:flex;flex-direction:column;gap:12px}
 .row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-weight:700}
@@ -299,9 +307,15 @@ html,body{background:#e9dcc0;color:var(--txt)}
   <div id="stageSel"><button id="stPrev">‹</button><div id="stLabel">STAGE 1<small>DUSK</small></div><button id="stNext">›</button></div>
   <div class="menuBtns">
     <button class="btn red" id="playBtn">Play</button>
-    <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
+    <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="charsBtn">Ninja</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
   </div>
   <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm / finisher · Esc pause</div>
+</div>
+
+<div id="chars" class="layer hidden">
+  <button class="btn sm" id="chBack">‹ Back</button>
+  <div id="chList" class="panel"></div>
+  <div id="chDetail" class="panel"><small id="chTitle"></small><b id="chName"></b><p id="chPerk"></p><button class="btn red" id="chBuy">Play</button></div>
 </div>
 
 <div id="arsenal" class="layer hidden">
