@@ -11,7 +11,7 @@ function at(m, x, y, z, rx = 0, ry = 0, rz = 0, name) { m.position.set(x, y, z);
 function pivot(name, x, y, z) { const g = new THREE.Group(); g.name = name; g.position.set(x, y, z); return g; }
 
 // ---------------------------------------------------------------- enemies
-const PAL = {
+const PAL_INK = {
   // ink silhouettes: near-black bodies, one accent each, paper-white eye glints
   grunt: { cloth: 0x161412, trim: 0x9c1a14, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x221f1c },
   runner: { cloth: 0x1c1b1e, trim: 0x55504a, skin: 0x2a2622, eye: 0xf2e8d2, wrap: 0x2a282c },
@@ -28,6 +28,25 @@ const PAL = {
   shadow: { cloth: 0x0a090c, trim: 0x6a2fb0, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x141218 },
   shade: { cloth: 0x0c0b10, trim: 0x4a2380, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x16131c },
 };
+// realistic look: dyed indigo, hemp and lacquer garb, real skin tones
+const PAL_REAL = {
+  grunt: { cloth: 0x27304a, trim: 0xa3241a, skin: 0xc49373, eye: 0xf2ece4, wrap: 0x353d52 },
+  runner: { cloth: 0x3b3d42, trim: 0x6e6a60, skin: 0xbd8c6c, eye: 0xf2ece4, wrap: 0x4a4c52 },
+  archer: { cloth: 0x4d4433, trim: 0x7d6c48, skin: 0xb98a66, eye: 0xf2ece4, wrap: 0x5b513d },
+  samurai: { cloth: 0x2c2522, trim: 0x9e1e15, skin: 0xc0906c, eye: 0xf2ece4, wrap: 0x40362f },
+  player: { cloth: 0x1d2333, trim: 0x3c3d44, skin: 0xc8977a, eye: 0xf6eedc, wrap: 0x272e40 },
+  kage: { cloth: 0x1d2333, trim: 0x3c3d44, skin: 0xc8977a, eye: 0xf6eedc, wrap: 0x272e40, ribbon: 0xc0221a },
+  hana: { cloth: 0x33243f, trim: 0x8c4cb4, skin: 0xd9a98a, eye: 0xf6eedc, wrap: 0x3e2e4c, ribbon: 0xeee2cc },
+  tetsu: { cloth: 0x52402a, trim: 0x9c7c46, skin: 0xb5845e, eye: 0xf6eedc, wrap: 0x5e4b34, ribbon: 0x7d5c2c },
+  raiden: { cloth: 0x2a201b, trim: 0xd3aa4a, skin: 0xc0906c, eye: 0xffd27a, wrap: 0x372b24, ribbon: 0xd3aa4a },
+  brute: { cloth: 0x5c4b38, trim: 0x7d5c2c, skin: 0xb07a58, eye: 0xf2ece4, wrap: 0x4b3d2f },
+  assassin: { cloth: 0x262033, trim: 0x6d3c8c, skin: 0xc0907a, eye: 0xd9b8ff, wrap: 0x30293f },
+  shogun: { cloth: 0x3b2b1b, trim: 0xc8a032, skin: 0xbf8f6a, eye: 0xffd27a, wrap: 0x4a3826 },
+  shadow: { cloth: 0x15121c, trim: 0x7b40c2, skin: 0x2c2636, eye: 0xb07cff, wrap: 0x1f1a28 },
+  shade: { cloth: 0x1a1621, trim: 0x5b2c92, skin: 0x2c2636, eye: 0xb07cff, wrap: 0x221d2c },
+};
+let PAL = PAL_REAL;
+export function setModelStyle(style) { PAL = style === 'ink' ? PAL_INK : PAL_REAL; }
 
 function blade(len, w, curve = 0.05) {
   const s = new THREE.Shape();
@@ -198,7 +217,7 @@ export function buildPlayer(id = 'kage') {
 }
 
 function buildOni() {
-  const skin = 0x231b18, dark = 0x100b0a, tiger = 0x5e5040;
+  const real = PAL === PAL_REAL, skin = real ? 0x8c2c20 : 0x231b18, dark = real ? 0x2a0e0a : 0x100b0a, tiger = real ? 0xc08a3a : 0x5e5040;   // red-skinned oni in a tiger hide
   const root = rigSkeleton({ surface: skin, joints: dark });
   const hips = root.getObjectByName('hips'), head = root.getObjectByName('head');
   hips.add(at(part(sph(0.2).scale(1.18, 0.55, 0.98), tiger), 0, -0.04, -0.005));                       // tiger-skin loincloth

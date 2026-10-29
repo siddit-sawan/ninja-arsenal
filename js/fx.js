@@ -48,20 +48,23 @@ export function makeFX(scene) {
   let fi = 0;
   const F = { blood: true };
 
+  // with Blood off (family mode) hits throw sakura petals and paper confetti instead of red ink
+  const PETALS = [0xf2a7b8, 0xf7d3dc, 0xfff6ea, 0xe8c15a];
   F.burst = (pos, normal, count, power = 1, color) => {
-    const base = color ?? (F.blood ? 0x9c0d14 : 0x150f22);
+    const base = color ?? (F.blood ? 0x9c0d14 : null);
     for (let k = 0; k < count; k++) {
       const it = take(drops);
       const side = k % 2 ? 1 : -1;
       it.p = pos.clone().add(new THREE.Vector3(rnd(-0.15, 0.15), rnd(-0.15, 0.15), rnd(-0.15, 0.15)));
       it.v = normal.clone().multiplyScalar(side * rnd(1, 4) * power).add(new THREE.Vector3(rnd(-1.5, 1.5), rnd(1, 4.5), rnd(-1.5, 1.5)).multiplyScalar(power));
       it.life = rnd(0.6, 1.3); it.s = rnd(0.5, 1.6); it.rot = rnd(0, 6);
-      drops.im.setColorAt(it.i, _c.set(base).multiplyScalar(rnd(0.7, 1.25)));
+      drops.im.setColorAt(it.i, base === null ? _c.set(PETALS[k % PETALS.length]) : _c.set(base).multiplyScalar(rnd(0.7, 1.25)));
     }
     drops.im.instanceColor.needsUpdate = true;
   };
   // directional spurt (severed stumps)
   F.spray = (pos, dir, count, speed = 2) => {
+    if (!F.blood) return;
     for (let k = 0; k < count; k++) {
       const it = take(drops);
       it.p = pos.clone(); it.v = dir.clone().multiplyScalar(speed * rnd(0.6, 1.2)).add(new THREE.Vector3(rnd(-0.5, 0.5), rnd(0, 0.8), rnd(-0.5, 0.5)));
@@ -79,6 +82,7 @@ export function makeFX(scene) {
     }
   };
   F.splat = (x, z, size) => {
+    if (!F.blood) return;   // no pools in family mode
     const it = take(splats);
     it.x = x; it.z = z; it.s = size * rnd(0.6, 1.3); it.life = 14; it.r = rnd(0, 6); it.sx = rnd(0.7, 1.3);
     splats.im.setColorAt(it.i, _c.set(F.blood ? 0x5a0408 : 0x0d0a16));

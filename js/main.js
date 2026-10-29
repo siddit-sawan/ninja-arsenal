@@ -8,8 +8,8 @@ import { audio, sfx, music } from './audio.js';
 import { CAP, batchParts } from './slicer.js';
 import { loadBody, cloneChar, RIG, cutMarks, MARK_MAT } from './body.js';
 import { makePhysics } from './ragdoll.js';
-import { buildEnemy, buildPlayer, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, sickle } from './models.js';
-import { buildWorld, THEMES, ARENA_R } from './world.js';
+import { buildEnemy, buildPlayer, setModelStyle, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, sickle } from './models.js';
+import { buildWorld, MAPS, THEMES_INK, THEMES_REAL } from './world.js';
 import { makeFX } from './fx.js';
 
 const $ = id => document.getElementById(id);
@@ -34,7 +34,7 @@ const CH = () => CHARS.find(c => c.id === save.char) || CHARS[0];
 
 const WIDS = ['katana', 'shuriken', 'kunai', 'kusarigama', 'naginata'];
 const defSave = () => ({ coins: 0, stage: 1, sel: 1, w: { katana: 1, shuriken: 0, kunai: 0, kusarigama: 0, naginata: 0 }, cur: 'katana', hearts: 0,
-  sfx: true, mus: true, q: null, blood: true, tut: false, best: 0, cam: 'tp', tutDone: false, shopTour: false, char: 'kage', chars: { kage: true } });
+  sfx: true, mus: true, q: null, blood: false, family: 1, style: 'real', map: 'auto', charms: {}, tut: false, best: 0, cam: 'tp', tutDone: false, shopTour: false, char: 'kage', chars: { kage: true } });
 let save = defSave();
 function loadSave() {
   try {
@@ -42,6 +42,7 @@ function loadSave() {
     if (s && typeof s === 'object') { save = Object.assign(defSave(), s); save.w = Object.assign(defSave().w, s.w || {}); save.chars = Object.assign({ kage: true }, s.chars || {}); }
     else save = defSave();
   } catch (e) { save = defSave(); }
+  if (!save.family) { save.family = 1; save.blood = false; }   // family-friendly by default; Blood can be turned back on in Settings
 }
 const persist = () => saveData(SAVE_KEY, JSON.stringify(save));
 
@@ -249,6 +250,13 @@ const ROSTER = [
   { kind: 'assassin', from: 24, w: n => 0.14 + 0.025 * n, name: 'ASSASSIN', tip: 'Vanishes in smoke and strikes from behind' },
 ];
 const BOSSES = ['oni', 'shogun', 'shadow'];   // every 5th stage, in rotation
+// Maps: stages rotate through them (map i opens once you reach stage i + 1); the menu can pin one instead
+const themeName = i => (save.style === 'ink' ? THEMES_INK : THEMES_REAL)[i].name;
+const mapIdx = id => MAPS.findIndex(m => m.id === id);
+const mapOpen = id => save.stage >= mapIdx(id) + 1;
+const autoMap = n => MAPS[(n - 1 + Math.floor(n / 5)) % MAPS.length].id;
+const stageMap = n => save.map !== 'auto' && mapOpen(save.map) ? save.map : autoMap(n);
+const EXPLORE_THEME = { shrine: 2, bamboo: 0, village: 2, snow: 2, castle: 0 };
 function makeStage(n) {
   const boss = n % 5 === 0;
   const total = Math.min(Math.round(12 + n * 3.2 + n * n * 0.06), 110) - (boss ? 4 : 0);
@@ -354,7 +362,7 @@ function shadowStep(e) {
   fx.dust(new V3(e.x, 0, e.z), 18, 1.3 * e.s); sfx.swish(0.7);
   const f = new V3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw)), a = rnd(-1, 1), r = reachOf(e) - 0.3;
   let x = player.pos.x - (f.x * Math.cos(a) - f.z * Math.sin(a)) * r, z = player.pos.z - (f.z * Math.cos(a) + f.x * Math.sin(a)) * r;
-  const R = Math.hypot(x, z), M = world.arenaR - 1.5; if (R > M) { x *= M / R; z *= M / R; }
+  const R = Math.hypot(x, z), M = world.arenaR - 1.5; if (R > M && !stage.explore) { x *= M / R; z *= M / R; }
   e.x = x; e.z = z; e.gate = null; e.root.rotation.y = Math.atan2(player.pos.x - x, player.pos.z - z);
   fx.dust(new V3(x, 0, z), 18, 1.3 * e.s);
   e.state = 'windup'; e.t = 0; e.windDur = e.d.wind ?? 0.6; sfx.warn(); floater('!', headPos(e), 'warn');
@@ -408,7 +416,7 @@ function updEnemies(dt) {
       if ((e.state === 'ready' || e.state === 'aim') && dist > reachOf(e) * (d.ranged ? 1.4 : 1.2)) { e.state = 'run'; e.t = 0; }
       if (d.ranged && e.state === 'aim' && dist < 5.5) {
         if (e.leapCD <= 0) {    // archers backflip out of reach
-          let tx = e.x - dx * 5.5, tz = e.z - dz * 5.5; const r = Math.hypot(tx, tz), R = world.arenaR - 1.5; if (r > R) { tx *= R / r; tz *= R / r; }
+          let tx = e.x - dx * 5.5, tz = e.z - dz * 5.5; const r = Math.hypot(tx, tz), R = world.arenaR - 1.5; if (r > R && !stage.explore) { tx *= R / r; tz *= R / r; }
           leap(e, tx, tz, 1.7, 0.7, -1); e.leapCD = rnd(3.5, 5); continue;
         }
         e.x -= dx * 2.2 * dt; e.z -= dz * 2.2 * dt;
@@ -418,13 +426,13 @@ function updEnemies(dt) {
         if (e.atkT <= 0) {
           e.t = 0;
           if (e.state === 'aim') e.state = 'throw';
-          else { e.state = 'windup'; e.windDur = d.wind ?? (d.boss ? 1.0 : 0.72); sfx.warn(); floater('!', headPos(e), 'warn'); }
+          else { e.state = 'windup'; e.windDur = e.npc ? Math.max(0.26, 0.5 - 0.05 * e.npc.rank) : d.wind ?? (d.boss ? 1.0 : 0.72); sfx.warn(); floater('!', headPos(e), 'warn'); }
         }
       } else if (e.state === 'windup') {
         if (e.t >= e.windDur) {
           e.state = 'recover'; e.t = 0; sfx.swish(0.6);
           if (d.boss || d.heavy) { shake = Math.max(shake, d.boss ? 0.8 : 0.5); sfx.thud(d.boss ? 2 : 1.2); if (d.heavy) fx.dust(new V3(e.x + dx * 1.4, 0, e.z + dz * 1.4), 14, 1.2); }
-          if (dist <= reachOf(e) + 0.75 && player.dashT <= 0 && player.y < 0.9) hurtPlayer(d.dmg || 1);
+          if (dist <= reachOf(e) + 0.75 && player.dashT <= 0 && player.y < 0.9) hurtPlayer(e.npc ? (e.npc.rank >= 4 ? 2 : 1) : d.dmg || 1);
           else { floater('DODGED', headPos(e), ''); if (tut) tut.flags.dodge = true; }
         }
       } else if (e.state === 'chargeWind') {
@@ -435,7 +443,7 @@ function updEnemies(dt) {
         if (!e.hitDone && dist < d.w + PLAYER_R + 0.6) { e.hitDone = true; if (player.dashT <= 0 && player.y < 0.9) hurtPlayer(d.dmg || 1); else floater('DODGED', headPos(e), ''); }
         if (e.t >= 0.55) { e.state = 'recover'; e.t = 0; if (!e.hitDone && tut) tut.flags.dodge = true; }
       } else if (e.state === 'recover') {
-        if (e.t >= 0.45) { e.state = 'ready'; e.atkT = rnd(0.8, 1.4) * (d.boss ? 1.3 : 1); }
+        if (e.t >= (e.npc ? 0.3 : 0.45)) { e.state = 'ready'; e.atkT = e.npc ? rnd(0.1, 0.55 - 0.07 * e.npc.rank) : rnd(0.8, 1.4) * (d.boss ? 1.3 : 1); }
       } else if (e.state === 'throw') {
         if (e.t >= 0.45) { throwStar(e); e.state = 'aim'; e.t = 0; e.atkT = rnd(2.2, 3.2); }
       }
@@ -447,7 +455,8 @@ function updEnemies(dt) {
       if (l < rr && l > 1e-4) { const k = (rr - l) * 0.5; e.x += ox / l * k; e.z += oz / l * k; }
     }
     { const ox = e.x - px, oz = e.z - pz, rr = d.w + PLAYER_R + 0.1, l = Math.hypot(ox, oz); if (l < rr && l > 1e-4) { e.x += ox / l * (rr - l); e.z += oz / l * (rr - l); } }
-    if (!e.gate) {
+    if (stage.explore) { const q = { x: e.x, z: e.z }; world.collide(q, d.w); e.x = q.x; e.z = q.z; }
+    else if (!e.gate) {
       for (const c of world.colliders) { const ox = e.x - c.x, oz = e.z - c.z, rr = c.r + d.w, l = Math.hypot(ox, oz); if (l < rr && l > 1e-4) { e.x += ox / l * (rr - l); e.z += oz / l * (rr - l); } }
       const r = Math.hypot(e.x, e.z), R = world.arenaR - d.w * 0.5; if (r > R) { e.x *= R / r; e.z *= R / r; }
     }
@@ -690,7 +699,7 @@ const nearestOnPlane = (p, plane) => plane.projectPoint(p, new V3());
 // for bonus rewards. Any further hit kills him outright; left alone he bleeds out after a while.
 const FINISH_R = 3.6, BLEED_OUT = 20;
 let finish = null;
-const canWound = e => !e.d.boss && !e.d.dummy && !e.air && !e.downed && (!stage.tutorial || (tut && tut.wounds));
+const canWound = e => !e.npc && !e.d.boss && !e.d.dummy && !e.air && !e.downed && (!stage.tutorial || (tut && tut.wounds));
 function woundSpot(e, plane) {
   const c = bodyCenter(e), off = plane.distanceToPoint(c), n = plane.normal;
   const p = c.clone().addScaledVector(n, -off);
@@ -710,7 +719,7 @@ function woundEnemy(e, spot, plane, push) {
 function updDowned(e, dt, px, pz) {
   if (e.frozen) { e.root.position.set(e.x, e.y, e.z); return; }
   const D = e.downed; D.t += dt; D.drip -= dt;
-  if (D.drip <= 0) { D.drip = rnd(0.25, 0.5); fx.burst(new V3(e.x, e.y + (D.spot === 'legs' ? 0.25 : 0.8) * e.s, e.z), UP, 3, 0.35); }
+  if (D.drip <= 0) { D.drip = rnd(0.25, 0.5); if (fx.blood) fx.burst(new V3(e.x, e.y + (D.spot === 'legs' ? 0.25 : 0.8) * e.s, e.z), UP, 3, 0.35); else fx.sparks(new V3(e.x, e.y + 1.25 * e.s, e.z), 3, 0xffe27a, 1.2); }   // family mode: dizzy stars
   if (!e.finishing) { let da = Math.atan2(px - e.x, pz - e.z) - e.root.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); e.root.rotation.y += da * Math.min(1, dt * 2); }
   // on his knees: thighs upright, shins flat behind, head bowed (lower still while being executed)
   const P = e.P, k = 1 - Math.exp(-dt * 10), f = e.finishing ? 1 : 0, lean = 0.2 + 0.15 * f;
@@ -724,7 +733,14 @@ function updDowned(e, dt, px, pz) {
   P.armL.rotation.z += ((D.spot === 'arm' ? 0.7 : 0) - P.armL.rotation.z) * k;
   P.torso.rotation.y *= 1 - k; P.torso.rotation.x += (Math.sin(D.t * 2.6) * 0.05 - P.torso.rotation.x) * k; P.hips.rotation.z *= 1 - k; P.head.rotation.y *= 1 - k;
   e.root.position.set(e.x, e.y, e.z);
-  if (D.t > BLEED_OUT && !e.finishing) killEnemy(e, new THREE.Plane().setFromNormalAndCoplanarPoint(UP, bodyCenter(e)), UP.clone(), { stroke: -4 });
+  if (D.t > BLEED_OUT && !e.finishing) faint(e);
+}
+// left alone too long, a dazed enemy faints and vanishes in a puff of smoke
+function faint(e) {
+  const i = enemies.indexOf(e); if (i < 0) return;
+  enemies.splice(i, 1); scene.remove(e.root);
+  fx.dust(new V3(e.x, 0, e.z), 18, 1.1); fx.dust(new V3(e.x, 0.6, e.z), 10, 0.6); sfx.swish(0.6);
+  addKill(e, headPos(e), -4);
 }
 function finishTarget() {
   if (state !== 'play' || finish) return null;
@@ -760,13 +776,13 @@ const finPlane = (n, p) => new THREE.Plane().setFromNormalAndCoplanarPoint(n.nor
 const diag = (e, s) => finSide(e).multiplyScalar(0.75 * s).add(new V3(0, 0.66, 0));   // s = +1 / -1: which shoulder
 
 const FINISHERS = [
-  { name: 'KAISHAKU', kanji: '介錯', strike: 1.25, fast: [1.25], cam: [1.2, 0.3, 0.35],   // overhead two-handed cut: beheading
+  { name: 'KABUTOWARI', kanji: '兜割り', strike: 1.25, fast: [1.25], cam: [1.2, 0.3, 0.35],   // overhead two-handed helmet-splitter: cleaves him top to bottom
     keys: [K_IN, K_SET, KAI_UP, KAI_CUT, hold(KAI_CUT, 2.0), K_FLICK, K_READY],
-    events: [[1.31, e => { const p = finNeck(e); finKill(e, [finPlane(UP.clone().addScaledVector(finSide(e), 0.2), p)], finSide(e).add(new V3(0, 0.6, 0))); fx.burst(p, UP, 60, 1.5); }]] },
+    events: [[1.31, e => { const p = finNeck(e); finKill(e, [finPlane(finSide(e).add(new V3(0, 0.1, 0)), p)], finSide(e)); fx.burst(p, UP, 40, 1.2); }]] },
   { name: 'IAIGIRI', kanji: '居合斬り', strike: 1.15, fast: [1.15], cam: [1.55, 0.15, 0.9], dash: [1.16, 0.09],   // crouched quick-draw, dash straight past; he only falls after
     keys: [K_IN, IAI_SET, [1.15, -0.35, -0.62, -1.55, -0.2, 0.45, -1.2, 0.34, 0.3, -0.45, 0.4, 0.58, -0.05], IAI_CUT, hold(IAI_CUT, 1.95),
       [2.35, -0.9, 0.5, -0.5, -0.2, 0.2, -0.8, 0.15, 0.08, -0.3, 0.3, 0, 0], K_READY], sheathed: [[0, 1.16]],
-    events: [[1.19, e => { finMark(e, [finPlane(UP.clone().addScaledVector(finSide(e), 0.12), finNeck(e))]); sfx.swish(1.4); slowmo(0.1, 0.5); }],
+    events: [[1.19, e => { finMark(e, [finPlane(UP.clone().addScaledVector(finSide(e), 0.12), finChest(e))]); sfx.swish(1.4); slowmo(0.1, 0.5); }],
       [1.9, e => finKill(e, e.finPlanes, finSide(e).add(new V3(0, 0.4, 0)))]] },
   { name: 'KESAGIRI', kanji: '袈裟斬り', strike: 1.15, fast: [1.15], cam: [1.05, 0.25, 0.45],   // diagonal shoulder-to-hip cleave
     keys: [K_IN, K_SET, hold(K_HIGH(1), 1.15), hold(K_LOW(1), 1.27), hold(K_LOW(1), 1.95), K_FLICK, K_READY],
@@ -950,8 +966,9 @@ function cineCam() {
   const [d0, dW, dP] = v.camD || [4.6, -0.3, -1.3], [h0, hW, hP] = v.camH || [1.35, 0.1, -0.5], [t0, tW, tP] = v.camT || [1.2, 0.1, -0.4];
   const dist = d0 + dW * wind + dP * post, h = h0 + hW * wind + hP * post;   // finishers: wide enough for a raised blade, then push in low
   const lift = v.air ? player.y : 0, dl = dist + lift * 0.6;                 // aerial: pull back and look up between the hero and his target
-  _cP.set(mx + cx * dl, h + lift * 0.35, mz + cz * dl);
-  _cT.set(mx + dx * 0.35 * post, t0 + tW * wind + tP * post + lift * 0.45, mz + dz * 0.35 * post);
+  const [lP, lT] = v.lift || [0.35, 0.45];                                    // how far camera and aim rise with him
+  _cP.set(mx + cx * dl, h + lift * lP, mz + cz * dl);
+  _cT.set(mx + dx * 0.35 * post, t0 + tW * wind + tP * post + lift * lT, mz + dz * 0.35 * post);
   camera.position.lerp(_cP, cineW);
   _cQ.setFromRotationMatrix(_cM.lookAt(_cP, _cT, UP));
   camera.quaternion.slerp(_cQ, cineW);
@@ -970,6 +987,7 @@ function cutBody(b, plane, push, sid) {
 }
 const bodySize = b => b.isDoll ? b.parts.length : b.group.userData.size * 4;
 function killEnemy(e, plane, push, opts = {}) {
+  if (e.npc) { npcHit(e, e.hp, push); return; }   // duels are never to the death: a lethal blow makes him yield
   const i = enemies.indexOf(e); if (i < 0) return;
   enemies.splice(i, 1);
   scene.remove(e.root);
@@ -1006,6 +1024,7 @@ function killEnemy(e, plane, push, opts = {}) {
   addKill(e, at, opts.stroke);
 }
 function hurtEnemy(e, dmg, point, push) {
+  if (e.npc) { npcHit(e, dmg, push); return; }
   e.hp -= dmg;
   e.stagger = e.d.boss ? 0.18 : 0.32; e.knock = e.d.boss ? 1.2 : 4;
   if (e.state === 'windup') { e.state = 'ready'; e.atkT = 0.6; }
@@ -1047,7 +1066,7 @@ function hurtPlayer(n) {
   const v = $('vignette'); v.style.transition = 'none'; v.style.opacity = 1; requestAnimationFrame(() => { v.style.transition = 'opacity .6s'; v.style.opacity = 0; });
   const h = $('hearts'); h.classList.remove('hit'); void h.offsetWidth; h.classList.add('hit');
   updHearts();
-  if (hearts <= 0) gameOver();
+  if (hearts <= 0) { if (stage.explore) loseDuel(); else gameOver(); }
 }
 function slowmo(scale, dur) { timeScale = Math.min(timeScale, scale); slowTo = scale; slowT = Math.max(slowT, dur); }
 
@@ -1060,15 +1079,28 @@ const STORM_CINE = { name: 'BLADE STORM', strike: STORM_DRAW, fast: [0.45], end:
   sheathed: [[0, 0.5], [2.48, 99]],
   keys: [hold(K_SET, 0), hold(IAI_SET, 0.45), hold(IAI_CUT, STORM_DRAW), hold(IAI_CUT, 2.15), K_SHEATHE, hold(K_SHEATHE, 2.7), [3.1, ...K_READY.slice(1)]],
   events: [[STORM_DRAW, stormDraw], [STORM_SHEATHE, stormSheathe]] };
+// Sky Storm, the aerial Blade Storm: from a jump he soars up, draws in a whirlwind spin at the top that marks
+// every enemy below, floats down holding the follow-through, lands, and they fall apart at the click of the sheath.
+const SKY_DRAW = 0.75, SKY_SHEATHE = 2.65;
+const SKY_CINE = { name: 'SKY STORM', title: 'SKY STORM', kanji: '天嵐', air: true, strike: SKY_DRAW, sheatheAt: SKY_SHEATHE, fast: [0.6], end: 3.1, flick: false,
+  cam: [2.2, -0.2, -1.4], camD: [4.4, 0, 2.4], camH: [1.2, 0, 1.2], camT: [1.1, 0, 0.1], lift: [0.75, 1.0],   // the camera rides up with him
+  path: [[0, 0, null], [0.55, 0, 4.2, 2], [SKY_DRAW, 0, 4.5], [2.0, 0, 3.4], [2.25, 0, 0, 1], [3.1, 0, 0]], sheathed: [[0, 0.55], [2.55, 99]],
+  keys: [A_LAUNCH, A_TUCK(0.45, -TAU), [0.6, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.3, 0, -1.0, 1.6, -0.4, 1.2, 0, 0.5, -0.05, 0],
+    [SKY_DRAW, -1.5, 1.15, -0.05, 0.35, -0.25, -0.3, -TAU + 0.1, 0, -0.5, 0.7, 0.2, 0.4, 0, -0.6, 0, 2 * TAU],
+    [2.0, -1.5, 1.15, -0.05, 0.35, -0.25, -0.3, -TAU + 0.1, 0, -0.6, 0.9, 0.1, 0.5, 0, -0.6, 0.1, 2 * TAU + 0.6],
+    A_LAND(2.25, -TAU, 2 * TAU + 0.6), [2.5, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.15, 0.1, -0.4, 0.5, 0.1, 0.4, 1, 0.3, 0, 2 * TAU + 0.6],
+    A_READY(3.1, -TAU, 2 * TAU + 0.6)],
+  events: [[SKY_DRAW, () => { stormDraw(); fx.sparks(heroP.handR.getWorldPosition(new V3()), 60, 0xffffff, 9); }], [2.25, () => airLand(1.3)], [SKY_SHEATHE, stormSheathe]] };
 function storm() {
   if (ult < 100 || state !== 'play' || finish) return;
-  ult = 0; if (tut) tut.flags.storm = true; sfx.ult(); slowmo(0.2, STORM_SHEATHE + 0.2);
-  startCine(STORM_CINE, null);
+  const v = airborne() ? SKY_CINE : STORM_CINE;
+  ult = 0; if (tut) tut.flags.storm = true; sfx.ult(); slowmo(0.2, (v.sheatheAt || STORM_SHEATHE) + 0.2);
+  startCine(v, null);
 }
 function stormDraw() {
   const fw = $('flashW'); fw.style.transition = 'none'; fw.style.opacity = 0.7; requestAnimationFrame(() => { fw.style.transition = 'opacity .5s'; fw.style.opacity = 0; });
-  banner('BLADE STORM', '嵐'); sfx.swish(1.4); shake = Math.max(shake, 0.4);
-  const sid = finish.sid = ++stroke;
+  banner(finish.v.title || 'BLADE STORM', finish.v.kanji || '嵐'); sfx.swish(1.4); shake = Math.max(shake, 0.4);
+  const sid = finish.sid = ++stroke, holdAt = (finish.v.sheatheAt || STORM_SHEATHE) - finish.v.strike;
   const dd = e => Math.hypot(e.x - player.pos.x, e.z - player.pos.z);
   const list = enemies.filter(e => dd(e) < 35).sort((a, b) => dd(a) - dd(b));
   list.forEach((e, i) => after(i * 0.03, () => {
@@ -1077,7 +1109,8 @@ function stormDraw() {
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, bodyCenter(e));
     const s = toScreen(bodyCenter(e)); if (s) stormLines.push({ x: s.x, y: s.y, a: rnd(0, Math.PI), t: 0.35 });
     if (e.d.boss && e.hp > 12) hurtEnemy(e, 12, bodyCenter(e), n);
-    else stormMark(e, plane, sid, STORM_SHEATHE - STORM_DRAW - i * 0.03);
+    else if (e.npc) hurtEnemy(e, 5, bodyCenter(e), n);   // rivals shrug off a Storm with a heavy wound
+    else stormMark(e, plane, sid, holdAt - i * 0.03);
   }));
   for (const pr of eProj.slice()) deflect(pr);
 }
@@ -1118,12 +1151,14 @@ function clearField() {
   for (const p of pProj) scene.remove(p.g);
   for (const p of eProj) scene.remove(p.g);
   enemies = []; pProj = []; eProj = []; timers = [];
+  for (const e of npcs) { scene.remove(e.root); e.npc.tag.remove(); }
+  npcs = []; talkNPC = duelNPC = null; $('dlg').classList.add('hidden'); $('npcPrompt').classList.add('hidden');
   fling.on = false; fling.mesh.visible = fling.chain.visible = false;
 }
 function startStage(n) {
   clearField();
-  stage = makeStage(n);
-  world.setTheme(stage.theme);
+  stage = makeStage(n); stage.map = stageMap(n);
+  world.setExplore(false); world.setMap(stage.map); world.setTheme(stage.theme); $('minimap').classList.add('hidden');
   maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
   score = 0; runCoins = 0; comboN = 0; ult = Math.min(ult, 40); invuln = 0;
   stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
@@ -1135,9 +1170,9 @@ function startStage(n) {
   for (const id of WIDS) cds[id] = 0;
   state = 'play'; vmMode = 'hand';
   showLayer(null); $('hud').classList.remove('hidden'); $('bossBar').classList.add('hidden'); $('coinsBadge').classList.add('hidden');
-  $('stageTag').textContent = `STAGE ${n} · ${THEMES[stage.theme].name.toUpperCase()}`;
+  $('stageTag').textContent = `STAGE ${n} · ${MAPS[mapIdx(stage.map)].name.toUpperCase()}`;
   updHearts(); buildWBar(); updHUD();
-  banner(`STAGE ${n}`, stage.boss ? 'BOSS STAGE' : THEMES[stage.theme].name);
+  banner(`STAGE ${n}`, stage.boss ? 'BOSS STAGE' : `${MAPS[mapIdx(stage.map)].name} · ${themeName(stage.theme)}`);
   $('tut').classList.add('hidden'); $('tutBox').classList.add('hidden'); tut = null;
   music(stage.boss ? 'battle' : 'battle');
   playsSinceAd++;
@@ -1156,8 +1191,8 @@ function updSpawner(dt) {
   if (DEV && QS.has('near')) { const a = rnd(-0.6, 0.6) + player.yaw; const nd = +QS.get('near') || 9; spawnEnemy(head.kind, player.pos.x - Math.sin(a) * nd, player.pos.z - Math.cos(a) * nd); }
   else {
     if (['grunt', 'runner', 'archer', 'assassin'].includes(head.kind) && Math.random() < 0.5) {
-      const a = rnd(0, Math.PI * 2), e = spawnEnemy(head.kind, Math.sin(a) * (ARENA_R + 2.6), -Math.cos(a) * (ARENA_R + 2.6));
-      leap(e, Math.sin(a) * (ARENA_R - 3.5), -Math.cos(a) * (ARENA_R - 3.5), 3.3, 1.05, 1);
+      const a = rnd(0, Math.PI * 2), W = world.wallR, e = spawnEnemy(head.kind, Math.sin(a) * (W + 2.6), -Math.cos(a) * (W + 2.6));
+      leap(e, Math.sin(a) * (W - 3.5), -Math.cos(a) * (W - 3.5), world.leapH, 1.05, 1);
       spawnT = stage.queue.length ? stage.queue[0].gap : 0;
       return;
     }
@@ -1172,7 +1207,7 @@ function bossDown(e) {
   for (const o of enemies.slice()) if (o.minion) killEnemy(o, new THREE.Plane().setFromNormalAndCoplanarPoint(new V3().randomDirection(), bodyCenter(o)), UP.clone(), { stroke: -3 });
 }
 function checkClear() {
-  if (state !== 'play' || stage.tutorial || stage.queue.length || enemies.length) return;
+  if (state !== 'play' || stage.tutorial || stage.explore || stage.queue.length || enemies.length) return;
   state = 'clearing';
   gameplay(false); exitLock();
   after(1.4, stageClear);
@@ -1232,7 +1267,7 @@ function toMenu() {
   trial = null; tut = null; $('tutBox').classList.add('hidden');
   clearField(); gameplay(false); exitLock();
   state = 'menu'; vmMode = 'hand';
-  world.setTheme(((save.sel - 1) % 3));
+  menuWorld(); $('minimap').classList.add('hidden');
   $('hud').classList.add('hidden'); $('tut').classList.add('hidden');
   showLayer('menu'); updLockUI(); updMenu(); music('menu');
 }
@@ -1245,13 +1280,13 @@ const trail = [], stormLines = [];
 const canvas = $('c');
 const needLock = () => !sdk.touch && !lockFail && !locked;
 function requestLock() {
-  if (sdk.touch || lockFail || locked) return;
+  if (sdk.touch || lockFail || locked || (DEV && QS.has('sim'))) return;
   try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { lockFail = true; }
 }
 const exitLock = () => { try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {} };
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
-  if (!locked) { blade = false; if (ptr.down) endStroke(); if (state === 'play') pause(); }
+  if (!locked) { blade = false; if (ptr.down) endStroke(); if (state === 'play' && !talkNPC) pause(); }   // a dialogue releases the mouse on purpose
   updLockUI();
 });
 document.addEventListener('pointerlockerror', () => {
@@ -1367,7 +1402,13 @@ addEventListener('keydown', e => {
   audio.unlock();
   keys[e.code] = true;
   const k = e.key.toLowerCase();
+  if (state === 'play' && talkNPC) {   // dialogue: number keys pick a reply, Esc leaves
+    if (k >= '1' && k <= '9') { const b = $('dlgOpts').children[+k - 1]; if (b) b.click(); }
+    else if (k === 'escape' || k === 't') closeDlg();
+    return;
+  }
   if (state === 'play') {
+    if (stage.explore && (k === 't' || k === 'r')) { const n = nearNPC(); if (n) { if (k === 't') talk(n); else challenge(n); return; } }
     if (k >= '1' && k <= '5') selectWeapon(WIDS[+k - 1]);
     else if (k === 'q') { if (!tryFinish()) storm(); }   // Q finishes a crippled enemy nearby, otherwise Blade Storm
     else if (k === 'e' || k === 'f') storm();
@@ -1401,6 +1442,7 @@ function jump() {
   else if (player.jumps < 2) { player.vy = 7.2; player.jumps = 2; player.flip = 0.001; sfx.swish(0.8); fovKick = Math.max(fovKick, 6); if (tut) tut.flags.flip = true; }
 }
 function updPlayer(dt) {
+  if (talkNPC) { player.vel.set(0, 0, 0); player.moveDir.set(0, 0, 0); return; }   // standing still while talking
   if (finish) { updFinishPlayer(); return; }
   let fx = 0, fz = 0, turn = 0;
   if (keys.KeyW || keys.ArrowUp) fz -= 1;
@@ -1422,8 +1464,7 @@ function updPlayer(dt) {
   p.x += player.vel.x * dt; p.z += player.vel.z * dt;
   if (player.dashT > 0) { player.dashT -= dt; p.addScaledVector(player.dashDir, 21 * dt); }
   if (player.dashCD > 0) { player.dashCD -= dt; if (player.dashCD <= 0) $('dashBtn').classList.remove('cd'); }
-  for (const c of world.colliders) { const ox = p.x - c.x, oz = p.z - c.z, rr = c.r + PLAYER_R, l = Math.hypot(ox, oz); if (l < rr && l > 1e-4) { p.x += ox / l * (rr - l); p.z += oz / l * (rr - l); } }
-  const r = Math.hypot(p.x, p.z), R = world.arenaR - PLAYER_R; if (r > R) { p.x *= R / r; p.z *= R / r; }
+  world.collide(p, PLAYER_R);   // props, walls (open only at the gates) and the edge of the arena or map
   const sp = Math.hypot(player.vel.x, player.vel.z);
   if (!player.ground) {
     player.vy -= 22 * dt; player.y += player.vy * dt;
@@ -1440,7 +1481,7 @@ function showJoy() {
   j.firstElementChild.style.transform = `translate(${joy.x * 56}px,${joy.y * 56}px)`;
 }
 function updLockUI() {
-  const show = state === 'play' && needLock() && !(DEV && QS.has('sim'));
+  const show = state === 'play' && needLock() && !talkNPC && !(DEV && QS.has('sim'));
   $('lockHint').classList.toggle('hidden', !show);
   $('cross').classList.toggle('hidden', !(state === 'play' && locked));
 }
@@ -1497,14 +1538,24 @@ $('camBtn').addEventListener('pointerdown', e => { e.stopPropagation(); cycleCam
 
 // menu
 function updMenu() {
-  const n = save.sel, th = n % 5 === 0 ? 3 : (n - 1) % 3;
-  $('stLabel').innerHTML = `STAGE ${n}<small>${n % 5 === 0 ? 'BOSS · ' : ''}${THEMES[th].name.toUpperCase()}</small>`;
+  const n = save.sel, th = n % 5 === 0 ? 3 : (n - 1) % 3, m = MAPS[mapIdx(stageMap(n))];
+  $('stLabel').innerHTML = `STAGE ${n}<small>${n % 5 === 0 ? 'BOSS · ' : ''}${m.name.toUpperCase()} · ${themeName(th).toUpperCase()}</small>`;
   $('stPrev').disabled = n <= 1; $('stNext').disabled = n >= save.stage;
+  const pin = save.map !== 'auto' ? MAPS[mapIdx(save.map)] : null, open = !pin || mapOpen(pin.id);
+  $('mpLabel').innerHTML = pin ? `${pin.name.toUpperCase()}<small>${open ? pin.kanji + ' · ' + pin.desc : '🔒 REACH STAGE ' + (mapIdx(pin.id) + 1)}</small>` : `ALL MAPS<small>STAGES ROTATE THROUGH ${MAPS.filter(x => mapOpen(x.id)).length} / ${MAPS.length} UNLOCKED MAPS</small>`;
+  $('exploreBtn').disabled = !mapOpen(stageMap(n));
   updCoins();
 }
 const click = (id, fn) => $(id).addEventListener('click', () => { audio.unlock(); sfx.click(); fn(); });
-click('stPrev', () => { save.sel = Math.max(1, save.sel - 1); updMenu(); world.setTheme(save.sel % 5 === 0 ? 3 : (save.sel - 1) % 3); });
-click('stNext', () => { save.sel = Math.min(save.stage, save.sel + 1); updMenu(); world.setTheme(save.sel % 5 === 0 ? 3 : (save.sel - 1) % 3); });
+// the menu backdrop shows the map and time of day the selected stage will be played in
+function menuWorld() { world.setExplore(false); world.setMap(stageMap(save.sel)); world.setTheme(save.sel % 5 === 0 ? 3 : (save.sel - 1) % 3); }
+click('stPrev', () => { save.sel = Math.max(1, save.sel - 1); updMenu(); menuWorld(); });
+click('stNext', () => { save.sel = Math.min(save.stage, save.sel + 1); updMenu(); menuWorld(); });
+const MAP_OPTS = ['auto', ...MAPS.map(m => m.id)];
+const cycleMap = d => { save.map = MAP_OPTS[(MAP_OPTS.indexOf(save.map) + d + MAP_OPTS.length) % MAP_OPTS.length]; persist(); updMenu(); menuWorld(); };
+click('mpPrev', () => cycleMap(-1));
+click('mpNext', () => cycleMap(1));
+click('exploreBtn', () => startExplore(stageMap(save.sel)));
 click('playBtn', () => save.tutDone ? playStage(save.sel, false) : startTutorial());
 click('tutorialBtn', () => startTutorial());
 click('charsBtn', () => { state = 'chars'; vmMode = 'hand'; chSel = save.char; showLayer('chars'); renderChars(); });
@@ -1600,11 +1651,19 @@ function updToggles() {
   const t = (id, on, a = 'ON', b = 'OFF') => { const el = $(id); el.textContent = on ? a : b; el.classList.toggle('on', on); };
   t('setSfx', save.sfx); t('setMus', save.mus); t('pSfx', save.sfx); t('pMus', save.mus);
   t('setCam', true, CAM_NAMES[save.cam].toUpperCase());
-  t('setQ', quality === 'high', 'HIGH', 'LOW'); t('setBlood', save.blood);
+  t('setQ', quality === 'high', 'HIGH', 'LOW'); t('setBlood', save.blood); t('setStyle', save.style !== 'ink', 'REALISTIC', 'INK');
 }
 function applyAudio() { audio.set(save.sfx, save.mus, sdk.mute || sdk.adMuted); }
 for (const [id, key] of [['setSfx', 'sfx'], ['pSfx', 'sfx'], ['setMus', 'mus'], ['pMus', 'mus']]) click(id, () => { save[key] = !save[key]; persist(); applyAudio(); updToggles(); });
 click('setCam', () => cycleCam());
+click('setStyle', () => { save.style = save.style === 'ink' ? 'real' : 'ink'; persist(); applyStyle(); updToggles(); });
+// Realistic or ink look: characters, hero, map, sky, lighting and the paper overlay all switch together
+function applyStyle() {
+  setModelStyle(save.style);
+  for (const k of Object.keys(EDEF)) templates[k] = batchParts(buildEnemy(k));
+  buildHero(chShown); world.setStyle(save.style);
+  document.body.classList.toggle('ink', save.style === 'ink');
+}
 click('setQ', () => { quality = quality === 'high' ? 'low' : 'high'; save.q = quality; persist(); applyQuality(); updToggles(); });
 click('setBlood', () => { save.blood = !save.blood; CAP.blood = fx.blood = save.blood; persist(); updToggles(); });
 $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.target.checked; });
@@ -1623,7 +1682,7 @@ $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.targ
 
 // pause / results / game over
 click('resumeBtn', resumeAndLock);
-click('restartBtn', () => { bankRunCoins(); if (stage.tutorial) startTutorial(); else playStage(stage.n, true); });
+click('restartBtn', () => { bankRunCoins(); if (stage.tutorial) startTutorial(); else if (stage.explore) startExplore(stage.map); else playStage(stage.n, true); });
 click('skipTutBtn', () => { save.tutDone = true; persist(); toMenu(); });
 click('quitBtn', toMenu);
 click('resNext', () => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, true));
@@ -1758,6 +1817,287 @@ function animHero(dt) {
   const sk = heroW.kusarigama.getObjectByName('sickle'); if (sk) sk.visible = !fling.on;
 }
 
+/* ============ explore mode ============ */
+// Free roam over a whole map: no waves, just practice dummies to slice and hidden charms (omamori) to find.
+// Each charm pays once (remembered per map); finding them all pays a bonus.
+const CHARM_COINS = 25, CHARM_ALL = 150;
+function startExplore(id) {
+  clearField();
+  world.setExplore(true); world.setMap(id);
+  const got = save.charms[id] || [];
+  world.charms.forEach((c, i) => { c.found = got.includes(i); c.g.visible = !c.found; });
+  stage = { n: 0, explore: true, map: id, boss: false, queue: [], total: world.charms.length, theme: EXPLORE_THEME[id] ?? 2, speedMul: 1 };
+  world.setTheme(stage.theme);
+  maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
+  score = 0; runCoins = 0; comboN = 0; ult = 100; invuln = 0;
+  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
+  killedCounted = got.length; revived = false; bossE = null; strokeKills.clear(); timeScale = 1; slowT = 0;
+  player.pos.set(0, 0, 4); player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.06; player.dashT = player.dashCD = 0; player.y = player.vy = player.flip = 0; player.ground = true;
+  trial = null; if (!has(cur)) cur = 'katana';
+  for (const id of WIDS) cds[id] = 0;
+  for (const d of world.dummies) { d.e = null; d.t = 0; spawnDummy(d); }
+  for (let i = 0; i < npcCap(); i++) spawnNPCNear(10, 75);
+  state = 'play'; vmMode = 'hand'; tut = null;
+  showLayer(null); $('hud').classList.remove('hidden'); $('bossBar').classList.add('hidden'); $('tut').classList.add('hidden'); $('tutBox').classList.add('hidden');
+  const m = MAPS[mapIdx(id)];
+  $('stageTag').textContent = `EXPLORE · ${m.name.toUpperCase()} · ${got.length}/${world.charms.length} CHARMS`;
+  updHearts(); buildWBar(); updHUD();
+  banner(m.name, 'EXPLORE · ' + m.kanji); music('menu');
+  $('minimap').classList.remove('hidden'); mmStatic = null;
+  gameplay(true); requestLock(); updLockUI();
+}
+function spawnDummy(d) { d.e = spawnEnemy('dummy', d.x, d.z, true); d.e.root.rotation.y = Math.atan2(-d.x, 4 - d.z); fx.dust(new V3(d.x, 0, d.z), 12, 0.8); }
+function updExplore(dt) {
+  if (!stage.explore) return;
+  for (const d of world.dummies) if (!enemies.includes(d.e) && (d.t += dt) > 4) { d.t = 0; spawnDummy(d); }   // practice dummies stand back up
+  const got = save.charms[stage.map] = save.charms[stage.map] || [];
+  const pl = world.local(player.pos);
+  world.charms.forEach((c, i) => {
+    if (c.found || Math.hypot(c.x - pl.x, c.z - pl.z) > 1.6 || player.y > 2.2) return;
+    c.found = true; c.g.visible = false; got.push(i); killedCounted = got.length;
+    save.coins += CHARM_COINS; sfx.coin(); fx.sparks(new V3(player.pos.x, 1.1, player.pos.z), 40, 0xffe08a, 4);
+    floater(`CHARM FOUND ${got.length}/${world.charms.length}  +${CHARM_COINS}`, { x: vw / 2, y: vh * 0.36 }, 'big');
+    if (got.length === world.charms.length) { save.coins += CHARM_ALL; banner('ALL CHARMS FOUND', `+${CHARM_ALL}`); sfx.win(); }
+    persist();
+    $('stageTag').textContent = `EXPLORE · ${MAPS[mapIdx(stage.map)].name.toUpperCase()} · ${got.length}/${world.charms.length} CHARMS`;
+  });
+}
+// minimap (explore): centred on you; the tile's outline is drawn once and repeated, then charms, rivals and you on top
+let mmStatic = null, mmTick = 0;
+const MM_SPAN = 130;   // metres across
+function drawMinimap() {
+  if (!stage || !stage.explore || state !== 'play' || (mmTick++ % 3)) return;
+  const cv = $('minimap'), g = cv.getContext('2d'), S = cv.width, P = world.tile, k = S / MM_SPAN, base = save.style === 'ink' ? '#e6dbc2' : '#6d7d55';
+  if (!mmStatic) {
+    mmStatic = document.createElement('canvas'); mmStatic.width = mmStatic.height = Math.ceil(P * k);
+    const c = mmStatic.getContext('2d'), X = x => (x + P / 2) * k, C = P / 2 * k;
+    c.fillStyle = base; c.fillRect(0, 0, mmStatic.width, mmStatic.height);
+    for (const o of world.mm) {
+      c.fillStyle = c.strokeStyle = o.col;
+      if (o.k === 'c') { c.beginPath(); c.arc(X(o.x), X(o.z), Math.max(1, o.r * k), 0, 7); c.fill(); }
+      else if (o.k === 'r') { c.save(); c.translate(X(o.x), X(o.z)); c.rotate(-o.rot); c.fillRect(-o.hw * k, -o.hd * k, o.hw * 2 * k, o.hd * 2 * k); c.restore(); }
+      else if (o.k === 'seg') { c.lineWidth = Math.max(1.5, o.w * k); c.beginPath(); c.moveTo(X(o.x0), X(o.z0)); c.lineTo(X(o.x1), X(o.z1)); c.stroke(); }
+      else if (o.k === 'ring') {
+        c.lineWidth = Math.max(1.5, o.w * 2 * k);
+        const cut = [...o.gaps].map(a => [a - o.gh, a + o.gh]).sort((a, b) => a[0] - b[0]);
+        for (let i = 0; i < cut.length; i++) { const a0 = cut[i][1], a1 = i + 1 < cut.length ? cut[i + 1][0] : cut[0][0] + Math.PI * 2; c.beginPath(); c.arc(C, C, o.r * k, a0 - Math.PI / 2, a1 - Math.PI / 2); c.stroke(); }
+      }
+    }
+  }
+  const pl = world.local(player.pos), wrap = v => v - Math.round(v / P) * P, M = S / 2;
+  g.clearRect(0, 0, S, S); g.save(); g.beginPath(); g.arc(M, M, M, 0, 7); g.clip(); g.fillStyle = base; g.fillRect(0, 0, S, S);
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) g.drawImage(mmStatic, M - (pl.x + P / 2) * k + dx * P * k, M - (pl.z + P / 2) * k + dz * P * k);
+  const dot = (x, z, r, fill) => { g.fillStyle = fill; g.strokeStyle = '#1a1208'; g.lineWidth = 1; g.beginPath(); g.arc(M + x * k, M + z * k, r, 0, 7); g.fill(); g.stroke(); };
+  for (const c of world.charms) if (!c.found) dot(wrap(c.x - pl.x), wrap(c.z - pl.z), 3, '#ffd34a');
+  for (const e of npcs) dot(e.x - player.pos.x, e.z - player.pos.z, 3.2, e === duelNPC ? '#ff4a3a' : e.npc.beaten ? '#9ad08a' : '#5ab4ff');
+  g.translate(M, M); g.rotate(-player.yaw);
+  g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, -6); g.lineTo(4.5, 5); g.lineTo(0, 2.5); g.lineTo(-4.5, 5); g.closePath(); g.fill(); g.stroke();
+  g.restore();
+}
+
+/* ============ rival ninjas (explore) ============ */
+// Wandering ninjas share the endless map with you. Each has a name, a clan, a rank (1-5, which sets how they fight)
+// and a temper (what they say). Walk up to one to talk (T) or challenge them to a duel (R). Duels are never to
+// the death: a beaten rival kneels and yields (coins by rank), and if you lose you're knocked down with hearts restored.
+// Talking gets you their story, rumours of hidden charms (direction and distance) and fighting tips.
+const NPC_N = 20;   // rivals kept round you (fewer on low graphics)
+const npcCap = () => quality === 'high' ? NPC_N : 12;
+let npcs = [], talkNPC = null, duelNPC = null;
+const NPC_NAMES = ['Kenji', 'Haru', 'Sora', 'Ren', 'Aki', 'Yumi', 'Daichi', 'Kaede', 'Ryo', 'Mei', 'Takeshi', 'Nori', 'Hikaru', 'Suzu', 'Isamu', 'Chiyo', 'Botan', 'Jiro', 'Kiku', 'Masa', 'Tora', 'Rin'];
+const CLANS = [
+  { n: 'Mist', lore: 'We move unseen through the morning fog.' },
+  { n: 'Crane', lore: 'Patience first, then one perfect strike.' },
+  { n: 'Iron Leaf', lore: 'Our blades are folded a thousand times.' },
+  { n: 'Red Lotus', lore: 'We bloom fiercest in the dark.' },
+  { n: 'Night Owl', lore: 'We see what others miss.' },
+  { n: 'Stone River', lore: 'Like water, we wear down any wall.' },
+];
+const RANKS = [null, { kinds: ['grunt'], title: 'Novice' }, { kinds: ['runner', 'archer'], title: 'Adept' }, { kinds: ['assassin'], title: 'Shadow' }, { kinds: ['samurai'], title: 'Master' }, { kinds: ['brute'], title: 'Grandmaster' }];
+const TEMPER = {
+  kind: { hi: ['Peace, traveller.', 'Fine day for a walk, is it not?', 'Your footsteps are light. Good.'], win: 'Well fought! You honour your teachers.', lose: 'Rest a moment. You were close.', accept: 'A friendly spar? Gladly!', beaten: 'Ha, you again! My shoulder still aches.', idle: ['The wind carries petals today.', 'Mind the gates, friend.', 'Breathe, then cut.'] },
+  proud: { hi: ['Hmph. Another hopeful blade.', 'You walk as if you own this road.', 'Do you know who I am?'], win: 'Impossible... You have my respect.', lose: 'As expected. Train harder.', accept: 'At last, someone bold enough!', beaten: 'Do not speak of our duel. Ever.', idle: ['None here can match me.', 'I have not lost in a hundred duels.', 'Bow when you pass.'] },
+  gruff: { hi: ['What do you want?', 'Make it quick.', 'Hm.'], win: 'Tch. Lucky cut.', lose: 'Go home, pup.', accept: "Fine. Don't cry after.", beaten: 'Hmph. You again.', idle: ['Too many wanderers about.', 'My knees ache.', 'Hmph.'] },
+  wise: { hi: ['Ah. The young one with sharp eyes.', 'Sit with me a while.', 'Every path leads back here.'], win: 'The student surpasses the master... today.', lose: 'Defeat is a teacher. Listen to it.', accept: 'Show me what your hands have learned.', beaten: 'You have grown since we crossed blades.', idle: ['Still water, still mind.', 'The blade follows the eye.', 'The charms are restless today.'] },
+};
+const TIPS = [
+  'Cut low across the legs and a foe drops to his knees. Then press Q for a finisher.',
+  'Jump before you press Q and the finisher happens in the air. Twice the reward.',
+  'A Storm unleashed in mid-air becomes a Sky Storm: everything below is marked.',
+  'A red ! means a strike is coming. Dash or jump and it will miss you.',
+  'Slice falling halves again before they land. Air slices pay extra.',
+  'Kunai split armour. Samurai fear them.',
+  "Swipe an archer's star out of the air to send it away.",
+  'Double-tap jump to flip. A flip can carry you over a sweeping blade.',
+];
+const pickOne = a => a[Math.floor(Math.random() * a.length)];
+function spawnNPCNear(d0, d1) {
+  for (let k = 0; k < 8; k++) {
+    const a = rnd(0, Math.PI * 2), d = rnd(d0, d1), x = player.pos.x + Math.sin(a) * d, z = player.pos.z - Math.cos(a) * d, q = { x, z };
+    world.collide(q, 0.6);
+    const lp = world.local(q);
+    if (Math.hypot(q.x - x, q.z - z) > 0.05 || Math.hypot(lp.x, lp.z) < world.wallR + 2) continue;   // open ground, outside the arena
+    return makeNPC(x, z);
+  }
+}
+function makeNPC(x, z) {
+  const rank = 1 + Math.min(4, Math.floor(Math.pow(Math.random(), 1.5) * 5)), kind = pickOne(RANKS[rank].kinds);
+  const e = spawnEnemy(kind, x, z, true); enemies.splice(enemies.indexOf(e), 1);
+  const N = e.npc = { name: pickOne(NPC_NAMES), clan: pickOne(CLANS), rank, temper: pickOne(Object.keys(TEMPER)), home: { x, z }, tx: x, tz: z, wait: rnd(0, 3),
+    runSpeed: e.speed, sayT: 0, sayCD: rnd(3, 9), yieldT: 0, beaten: false, stuck: 0, tag: document.createElement('div') };
+  e.speed = 1.4; e.state = 'idle';
+  N.tag.className = 'npcTag'; N.tag.innerHTML = `<i></i><b>${N.name}</b><small>${N.clan.n} clan · ${RANKS[rank].title} ${'★'.repeat(rank)}</small>`;
+  $('npcTags').appendChild(N.tag);
+  npcs.push(e);
+  return e;
+}
+function removeNPC(e) { scene.remove(e.root); e.npc.tag.remove(); npcs.splice(npcs.indexOf(e), 1); }
+function say(e, text, t = 3.5) { e.npc.sayT = t; const b = e.npc.tag.firstChild; b.textContent = text; }
+const turnTo = (e, x, z, k) => { let da = Math.atan2(x - e.x, z - e.z) - e.root.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); e.root.rotation.y += da * k; };
+function kneel(e, dt) {   // yielding: down on one knee, head bowed
+  const P = e.P, k = 1 - Math.exp(-dt * 8);
+  P.hips.position.y += (RIG.hips.y - 0.5 - P.hips.position.y) * k;
+  rotTo(P.hips, 0.25, k); rotTo(P.legL, -1.5, k); rotTo(P.kneeL, 1.6, k); rotTo(P.legR, -0.1, k); rotTo(P.kneeR, 1.7, k);
+  rotTo(P.head, 0.55, k); rotTo(P.armL, -0.3, k); rotTo(P.armR, -0.2, k); rotTo(P.elbowR, -0.3, k);
+}
+function updNPCs(dt) {
+  if (!stage || !stage.explore) return;
+  // keep a handful of rivals round you as you travel the endless map
+  for (const e of npcs.slice()) if (e !== duelNPC && e !== talkNPC && Math.hypot(e.x - player.pos.x, e.z - player.pos.z) > 130) removeNPC(e);
+  if (npcs.length < npcCap() && Math.random() < dt * 4) spawnNPCNear(40, 90);
+  if (duelNPC && Math.hypot(duelNPC.x - player.pos.x, duelNPC.z - player.pos.z) > 45) loseDuel(true);   // running off forfeits
+  for (const e of npcs) {
+    const N = e.npc; N.sayT -= dt;
+    if (enemies.includes(e)) continue;   // duelling: the fight AI drives him
+    const dx = player.pos.x - e.x, dz = player.pos.z - e.z, dist = Math.hypot(dx, dz);
+    if (N.yieldT > 0) { N.yieldT -= dt; kneel(e, dt); e.root.position.set(e.x, 0, e.z); continue; }
+    if (e === talkNPC || e === duelNPC || (dist < 5 && !duelNPC)) { e.state = 'idle'; turnTo(e, player.pos.x, player.pos.z, Math.min(1, dt * 5)); }
+    else if (duelNPC && Math.hypot(duelNPC.x - e.x, duelNPC.z - e.z) < 30) { e.state = 'idle'; turnTo(e, duelNPC.x, duelNPC.z, Math.min(1, dt * 3)); }   // stop and watch the duel
+    else if ((N.wait -= dt) > 0) e.state = 'idle';
+    else {
+      let mx = N.tx - e.x, mz = N.tz - e.z; const l = Math.hypot(mx, mz);
+      if (l < 0.7 || N.stuck > 1.5) { const a = rnd(0, Math.PI * 2), d = rnd(4, 14); N.tx = N.home.x + Math.sin(a) * d; N.tz = N.home.z - Math.cos(a) * d; N.wait = rnd(1, 5); N.stuck = 0; }
+      else {
+        e.state = 'run'; mx /= l; mz /= l;
+        const ox = e.x, oz = e.z, q = { x: e.x + mx * e.speed * dt, z: e.z + mz * e.speed * dt }; world.collide(q, e.d.w);
+        e.x = q.x; e.z = q.z; N.stuck = Math.hypot(e.x - ox, e.z - oz) < e.speed * dt * 0.3 ? N.stuck + dt : 0;
+        turnTo(e, N.tx, N.tz, Math.min(1, dt * 6));
+      }
+    }
+    if (dist < 12 && (N.sayCD -= dt) <= 0 && e !== talkNPC) { say(e, N.beaten ? TEMPER[N.temper].beaten : pickOne(TEMPER[N.temper].idle)); N.sayCD = rnd(9, 18); }
+    animEnemy(e, dt); e.root.position.set(e.x, 0, e.z);
+  }
+}
+const nearNPC = () => { let b = null, bd = 3.2; for (const e of npcs) { if (e === duelNPC || e.npc.yieldT > 0) continue; const d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z); if (d < bd) { bd = d; b = e; } } return b; };
+// name tags with speech bubbles over nearby rivals, and the talk / duel prompt for the closest one
+function drawNPCTags() {
+  const live = stage && stage.explore && state === 'play' && cineW < 0.2;
+  for (const e of npcs) {
+    const t = e.npc.tag, d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z), s = live && d < 30 && toScreen(new V3(e.x, e.y + e.d.h * e.s + 0.45, e.z));
+    t.classList.toggle('hidden', !s); if (!s) continue;
+    t.style.transform = `translate(${s.x}px,${s.y}px) translate(-50%,-100%) scale(${clamp(1.25 - d / 30, 0.55, 1)})`;
+    t.classList.toggle('duel', e === duelNPC); t.classList.toggle('beaten', e.npc.beaten); t.classList.toggle('say', e.npc.sayT > 0);
+  }
+  const n = live && !talkNPC && !duelNPC && nearNPC(), pr = $('npcPrompt'), s = n && toScreen(new V3(n.x, 0.2, n.z));
+  pr.classList.toggle('hidden', !s); if (s) { pr.style.left = s.x + 'px'; pr.style.top = s.y + 'px'; pr.npc = n; }
+}
+$('npcTalk').addEventListener('pointerdown', e => { e.stopPropagation(); const n = $('npcPrompt').npc; if (n) talk(n); });
+$('npcDuel').addEventListener('pointerdown', e => { e.stopPropagation(); const n = $('npcPrompt').npc; if (n) challenge(n); });
+// dialogue: the rival's line, then numbered replies
+function talk(e) {
+  if (duelNPC) return;
+  talkNPC = e; ptr.down = false; blade = false; for (const k in keys) keys[k] = false;
+  exitLock(); updLockUI();
+  const T = TEMPER[e.npc.temper];
+  dlg(e, e.npc.beaten ? T.beaten : pickOne(T.hi));
+}
+function dlg(e, text) {
+  const N = e.npc;
+  $('dlgName').innerHTML = `${N.name} <small>${N.clan.n} clan · ${RANKS[N.rank].title} ${'★'.repeat(N.rank)}${N.beaten ? ' · beaten' : ''}</small>`;
+  $('dlgText').textContent = text;
+  const opts = [
+    ['Who are you?', () => dlg(e, `I am ${N.name} of the ${N.clan.n} clan, a${/^[AEIOU]/.test(RANKS[N.rank].title) ? 'n' : ''} ${RANKS[N.rank].title.toLowerCase()} of rank ${N.rank}. ${N.clan.lore}`)],
+    ['Heard any rumours?', () => dlg(e, rumour(e))],
+    ['Teach me something.', () => dlg(e, pickOne(TIPS))],
+    [N.beaten ? 'Rematch!' : 'I challenge you to a duel!', () => challenge(e)],
+    ['Farewell.', closeDlg],
+  ];
+  $('dlgOpts').innerHTML = '';
+  opts.forEach(([label, fn], i) => { const b = document.createElement('button'); b.className = 'btn sm'; b.innerHTML = `<i>${i + 1}</i>${label}`; b.addEventListener('click', ev => { ev.stopPropagation(); sfx.click(); fn(); }); $('dlgOpts').appendChild(b); });
+  $('dlg').classList.remove('hidden');
+}
+function closeDlg() { if (!talkNPC) return; talkNPC = null; $('dlg').classList.add('hidden'); requestLock(); updLockUI(); }
+// where's the nearest charm you haven't found? (the map repeats, so measure to the nearest copy)
+function rumour(e) {
+  const P = world.tile, pl = world.local(player.pos), wrap = v => v - Math.round(v / P) * P;
+  let best = null, bd = 1e9;
+  for (const c of world.charms) if (!c.found) { const dx = wrap(c.x - pl.x), dz = wrap(c.z - pl.z), d = Math.hypot(dx, dz); if (d < bd) { bd = d; best = { dx, dz }; } }
+  if (!best) return 'You have found every charm in these lands. Even I am impressed.';
+  const dirs = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+  const dir = dirs[Math.round(((Math.atan2(best.dx, -best.dz) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8], paces = Math.max(5, Math.round(bd / 5) * 5);
+  return { gruff: `Charm? ...${dir}. Maybe ${paces} paces. Now leave me be.`, proud: `Even a novice could find it: ${paces} paces ${dir}. I have no need of charms.`,
+    kind: `I saw a red charm glinting to the ${dir}, about ${paces} paces from here. Good luck!`, wise: `Walk ${dir}, some ${paces} paces. What is lost waits to be found.` }[e.npc.temper];
+}
+// duels: a short stand-off, then he fights like an enemy of his rank until one of you is beaten
+function challenge(e) {
+  if (duelNPC || e.npc.yieldT > 0) return;
+  const N = e.npc;
+  if (talkNPC) { talkNPC = null; $('dlg').classList.add('hidden'); }
+  duelNPC = e; say(e, TEMPER[N.temper].accept, 2.5);
+  banner('DUEL', `${N.name} · ${N.clan.n} clan · ${RANKS[N.rank].title}`); sfx.warn();
+  hearts = maxHearts; updHearts(); for (const pr of eProj.slice()) removeEProj(pr);
+  requestLock(); updLockUI();
+  after(1.6, () => {
+    if (duelNPC !== e) return;
+    e.hp = e.maxHp = 4 + 3 * N.rank; e.speed = N.runSpeed * (1.1 + N.rank * 0.08);
+    $('bossName').textContent = `${N.name.toUpperCase()} · ${RANKS[N.rank].title.toUpperCase()}`; $('bossBar').classList.remove('hidden'); $('bossFill').style.width = '100%'; e.state = 'run'; e.t = 0; e.atkT = 0; e.leapCD = rnd(1, 3); e.gate = null;
+    enemies.push(e); banner('FIGHT!', ''); sfx.swish(1.2);
+  });
+}
+// A rival reads your blade: each hit may be parried (counter-attack at once) or evaded (a side-step),
+// more often the higher his rank. Whatever lands chips at a long health bar; at zero he yields.
+function npcHit(e, dmg, push) {
+  if (!enemies.includes(e) || e.npc.guardT > T) return;
+  e.npc.guardT = T + 0.12;   // one stroke counts once
+  const N = e.npc, c = bodyCenter(e), roll = Math.random(), block = 0.18 + 0.07 * N.rank;   // 25% (novice) to 53% (grandmaster)
+  if (roll < block * 0.6) {
+    sfx.clang(); fx.sparks(c, 24); floater('PARRIED', headPos(e), 'warn'); shake = Math.max(shake, 0.25);
+    e.stagger = 0; e.state = 'windup'; e.t = 0; e.windDur = Math.max(0.22, 0.4 - 0.04 * N.rank); sfx.warn();
+    return;
+  }
+  if (roll < block) {
+    const sx = Math.random() < 0.5 ? 1 : -1, dx = player.pos.x - e.x, dz = player.pos.z - e.z, l = Math.hypot(dx, dz) || 1;
+    fx.dust(new V3(e.x, 0, e.z), 10, 0.8); sfx.swish(0.7); floater('EVADED', headPos(e), '');
+    const q = { x: e.x - dz / l * 2.6 * sx - dx / l * 0.8, z: e.z + dx / l * 2.6 * sx - dz / l * 0.8 }; world.collide(q, e.d.w); e.x = q.x; e.z = q.z;
+    e.stagger = 0; e.state = 'ready'; e.atkT = 0.05;
+    return;
+  }
+  e.hp -= dmg; $('bossFill').style.width = Math.max(0, e.hp / e.maxHp * 100) + '%';
+  sfx.slice(0.5); fx.burst(c, push || UP, 6, 0.5); shake = Math.max(shake, 0.15);
+  if (e.hp <= 0) { npcYield(e); return; }
+  e.stagger = 0.1; e.knock = 2;   // barely flinches
+}
+function endDuel(e) {
+  const i = enemies.indexOf(e); if (i >= 0) enemies.splice(i, 1);
+  if (e.marks) { scene.remove(e.marks); for (const m of e.marks.children) m.geometry.dispose(); e.marks = null; }
+  Object.assign(e, { stormed: null, frozen: false, air: null, y: 0, stagger: 0, downed: null, finishing: false, speed: 1.4, state: 'idle' });
+  duelNPC = null; for (const pr of eProj.slice()) removeEProj(pr); $('bossBar').classList.add('hidden');
+  hearts = maxHearts; updHearts();
+}
+function npcYield(e) {
+  const N = e.npc; endDuel(e);
+  N.beaten = true; N.yieldT = 5; N.wait = 2;
+  const coins = 30 * N.rank; save.coins += coins; save.duelWins = (save.duelWins || 0) + 1; persist();
+  banner('VICTORY', `${N.name} yields`); sfx.win(); slowmo(0.3, 0.6); fx.sparks(bodyCenter(e), 30, 0xffe08a, 5);
+  floater(`+${coins} DUEL WON`, { x: vw / 2, y: vh * 0.36 }, 'big'); say(e, TEMPER[N.temper].win, 4.5);
+}
+function loseDuel(fled = false) {
+  const e = duelNPC; invuln = 2.5; sfx.lose(); slowmo(0.3, 0.8);
+  if (!e) { hearts = maxHearts; updHearts(); return; }
+  endDuel(e); say(e, fled ? 'Running away? Hah!' : TEMPER[e.npc.temper].lose, 4);
+  banner(fled ? 'FORFEIT' : 'DEFEATED', `${e.npc.name} wins the duel`);
+  if (!fled) { const dx = player.pos.x - e.x, dz = player.pos.z - e.z, l = Math.hypot(dx, dz) || 1; player.vel.set(dx / l * 9, 0, dz / l * 9); player.vy = 5; player.ground = false; }
+}
+
 /* ============ tutorial ============ */
 let tut = null;
 function spawnFront(kind, n, d, spread = 0.45) {
@@ -1797,8 +2137,8 @@ const TUT_STEPS = [
 function tutTarget() { spawnFront('grunt', 1, 4.5); enemies[enemies.length - 1].state = 'idle'; }   // a ninja who stands still for practice
 function startTutorial() {
   clearField();
-  stage = { n: 0, tutorial: true, boss: false, queue: [], total: TUT_STEPS.length, theme: 2, speedMul: 1 };
-  world.setTheme(2);
+  stage = { n: 0, tutorial: true, boss: false, queue: [], total: TUT_STEPS.length, theme: 2, speedMul: 1, map: 'shrine' };
+  world.setExplore(false); world.setMap('shrine'); world.setTheme(2); $('minimap').classList.add('hidden');
   maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
   score = 0; runCoins = 0; comboN = 0; ult = 0; invuln = 0;
   stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
@@ -1962,7 +2302,7 @@ function drawThreats() {
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw), t = performance.now() / 1000;
   for (const e of enemies) {
     const dx = e.x - player.pos.x, dz = e.z - player.pos.z, dist = Math.hypot(dx, dz);
-    if (dist > 28 || e.gate) continue;
+    if (dist > 28 || e.gate || e.d.dummy) continue;
     const s = toScreen(bodyCenter(e));
     if (s && s.x > 30 && s.x < vw - 30 && s.y > 30 && s.y < vh - 30) continue;
     const lx = dx * cy - dz * sy, lf = -dx * sy - dz * cy, a = Math.atan2(lx, lf);
@@ -2003,7 +2343,7 @@ function step(rdt, now, draw = true) {
   if (running && stage) {
     if (state === 'play') {
       updPlayer(dt);
-      updTutorial(dt);
+      updTutorial(dt); updExplore(dt); updNPCs(dt);
       updSpawner(dt);
       for (const id of WIDS) cds[id] = Math.max(0, cds[id] - dt);
       if (ptr.down && WEAP[cur].mode === 'throw' && cds[cur] <= 0) { fireThrow(cur, ptr.x, ptr.y); cds[cur] = WEAP[cur].cd(lvl(cur)); }
@@ -2039,7 +2379,7 @@ function step(rdt, now, draw = true) {
       const pitch = clamp(player.pitch + (wide ? -0.32 : -0.08), -1.3, 0.9), yaw = player.yaw;
       const fx = -Math.sin(yaw) * Math.cos(pitch), fy = Math.sin(pitch), fz = -Math.cos(yaw) * Math.cos(pitch);
       const hx = player.pos.x + Math.cos(yaw) * side, hy = 1.55 + lift + player.y * 0.75 - landDip, hz = player.pos.z - Math.sin(yaw) * side;
-      for (let i = 0; i < 6 && Math.hypot(hx - fx * dist, hz - fz * dist) > ARENA_R + 3.5; i++) dist *= 0.8;   // stay out of the bamboo
+      for (let i = 0; i < 6 && Math.hypot(hx - fx * dist, hz - fz * dist) > world.camR; i++) dist *= 0.8;   // stay out of the scenery past the arena
       const kc = 1 - Math.exp(-rdt * 16);
       camera.position.lerp(_camT.set(hx - fx * dist, Math.max(0.35, hy - fy * dist), hz - fz * dist), state === 'play' ? kc : 1);
       camera.rotation.set(pitch, yaw, 0);
@@ -2056,7 +2396,7 @@ function step(rdt, now, draw = true) {
   if (composer) composer.render(); else renderer.render(scene, camera);
   tuneRes(rawDt);
   drawTrail(performance.now());
-  drawThreats();
+  drawThreats(); drawMinimap(); drawNPCTags();
   if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
 }
 
@@ -2068,6 +2408,7 @@ async function boot() {
   sdk.onAdUI = updAdUI;
   sdk.onAuth = () => { loadSave(); if (state === 'menu') updMenu(); updCoins(); };
   loadSave();
+  if (DEV && QS.get('style')) save.style = QS.get('style');   // dev: &style=ink|real
   quality = save.q || (sdk.touch ? 'low' : 'high');
   document.body.classList.toggle('touch', sdk.touch);
   if (sdk.touch) $('menuHint').innerHTML = 'Left thumb: move &amp; turn · Right side: swipe to slice<br>Tap to throw · JUMP twice to flip · DASH to dodge · STORM when charged';
@@ -2079,13 +2420,15 @@ async function boot() {
   setupRenderer();
   await new Promise(r => setTimeout(r, 30));
   world = buildWorld(scene, renderer, quality);
+  world.style = save.style; world.setStyle(save.style); world.setMap(stageMap(save.sel));
   fx = makeFX(scene); fx.blood = save.blood;
-  phys = makePhysics(scene, fx, sfx, world.arenaR);
+  phys = makePhysics(scene, fx, sfx, world);
   await loadBody('models/body.glb');
+  setModelStyle(save.style); document.body.classList.toggle('ink', save.style === 'ink');
   for (const k of Object.keys(EDEF)) templates[k] = batchParts(buildEnemy(k));   // fewer draw calls per enemy
   buildViewmodel(); buildFling(); buildHero(); chShown = save.char;
   applyQuality();
-  world.setTheme((save.sel - 1) % 3);
+  world.setTheme(save.sel % 5 === 0 ? 3 : (save.sel - 1) % 3);
   // pre-warm shaders with one of everything on screen
   const warm = [];
   for (const k of Object.keys(EDEF)) { const t = cloneChar(templates[k]); t.position.set(rnd(-3, 3), 0, -10); scene.add(t); warm.push(t); }
@@ -2108,13 +2451,15 @@ async function boot() {
   if (test === 'arsenal') $('arsenalBtn').click();
   if (test === 'chars') { $('charsBtn').click(); if (QS.get('ch')) { chSel = QS.get('ch'); renderChars(); } }   // dev: character screen
   if (DEV && QS.get('dash')) after(+(QS.get('dashAt') || 1), () => { const m = { F: [0, -1], B: [0, 1], L: [-1, 0], R: [1, 0] }[QS.get('dash')], sy = Math.sin(player.yaw), cy = Math.cos(player.yaw); player.moveDir.set(m[0] * cy + m[1] * sy, 0, -m[0] * sy + m[1] * cy); dash(); });   // dev: &dash=F|B|L|R
-  if (test === 'storm') { startStage(+(QS.get('stage') || 2)); after(+(QS.get('at') || 1.6), () => { ult = 100; storm(); }); }   // dev: fire Blade Storm into the first wave
+  if (test === 'storm') { startStage(+(QS.get('stage') || 2)); const at = +(QS.get('at') || 1.6); if (QS.has('air')) after(at - 0.2, jump); after(at, () => { ult = 100; storm(); }); }   // &air: Sky Storm   // dev: fire Blade Storm into the first wave
   if (test === 'finish') {   // dev: a crippled ninja in front of you; &go runs the finisher
     startStage(1);
     after(0.3, () => { const e = spawnEnemy('grunt', player.pos.x, player.pos.z - 2.8, true); e.state = 'idle'; woundEnemy(e, 'legs', new THREE.Plane(UP.clone(), -0.4), new V3(1, 0, 0)); });
     if (QS.has('air')) after(1.2, jump);   // &air: jump first for an aerial finisher
     if (QS.has('go')) after(1.4, tryFinish);
   }
+  if (test === 'explore') { startExplore(QS.get('map') || 'shrine'); if (QS.get('at')) { const [x, z] = QS.get('at').split(',').map(Number); player.pos.set(x, 0, z); } }   // dev: ?test=explore&map=castle&at=x,z
+  if (test === 'explore' && (QS.has('talk') || QS.has('duel'))) after(0.5, () => { const e = makeNPC(player.pos.x, player.pos.z - 2.6); QS.has('talk') ? talk(e) : challenge(e); });   // dev: &talk / &duel
   if (test === 'tutorial') { startTutorial(); if (QS.get('tstep')) { tut.i = +QS.get('tstep') - 2; nextTutStep(); } }
   if (test === 'tour') { $('arsenalBtn').click(); startTour(false); for (let i = 0; i < +(QS.get('tour') || 0); i++) nextTour(); }
   if (DEV && QS.get('cam')) save.cam = QS.get('cam');

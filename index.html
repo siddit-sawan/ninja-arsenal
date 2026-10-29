@@ -269,6 +269,40 @@ html,body{background:#e9dcc0;color:var(--txt)}
 #tutBox.done{border-color:#2e6b2a;box-shadow:0 0 24px rgba(46,107,42,.3)}#tutBox.done #tutTitle::after{color:#2e6b2a}
 #tourHole{border-color:var(--red);box-shadow:0 0 0 9999px rgba(45,28,12,.6)}
 #adwait{background:rgba(30,20,10,.7)}
+
+/* ===== maps, explore, realistic look ===== */
+#mapSel{display:flex;align-items:center;gap:10px;margin:0 0 6px}
+#mapSel button{width:36px;height:36px;border-radius:50%;background:var(--panel);color:var(--ink);border:1px solid var(--line);font-size:18px;font-weight:900}
+#mpLabel{min-width:220px;max-width:320px;font-family:"Brush","Segoe UI",system-ui,sans-serif;font-size:18px;color:var(--ink);line-height:1.1}
+#mpLabel small{display:block;font-family:"Segoe UI",system-ui,sans-serif;font-size:10px;letter-spacing:.12em;color:var(--mut);margin-top:3px}
+#exploreBtn:disabled{opacity:.4}
+#minimap{position:absolute;left:auto;bottom:auto;top:calc(max(12px,env(safe-area-inset-top)) + 64px);right:14px;width:170px;height:170px;border-radius:50%;box-shadow:0 0 0 3px rgba(20,16,12,.75),0 6px 18px rgba(0,0,0,.35);opacity:.92}
+body.cine #minimap{opacity:0}
+@media (max-width:700px){#minimap{width:110px;height:110px;top:calc(max(12px,env(safe-area-inset-top)) + 54px)}}
+body:not(.ink) #paper{display:none}
+body:not(.ink) #score,body:not(.ink) #stageTag,body:not(.ink) #hudCoins{color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.9),0 2px 10px rgba(0,0,0,.55)}
+
+/* ===== rival ninjas: name tags, speech bubbles, prompt, dialogue ===== */
+#npcTags{position:fixed;inset:0;z-index:4;pointer-events:none;overflow:hidden}
+.npcTag{position:absolute;left:0;top:0;text-align:center;white-space:nowrap;color:#fff;text-shadow:0 1px 2px #000,0 0 8px rgba(0,0,0,.6);transform-origin:50% 100%}
+.npcTag b{display:block;font-family:"Brush","Segoe UI",system-ui,sans-serif;font-weight:400;font-size:17px;letter-spacing:.04em}
+.npcTag small{display:block;font-size:10px;letter-spacing:.1em;opacity:.85}
+.npcTag i{display:none;font-style:normal;margin:0 auto 6px;max-width:220px;white-space:normal;padding:6px 10px;border-radius:12px;background:rgba(246,240,228,.95);color:#17120e;text-shadow:none;font-size:13px;font-weight:600;position:relative}
+.npcTag i::after{content:"";position:absolute;left:50%;bottom:-6px;margin-left:-6px;border:6px solid transparent;border-bottom:0;border-top-color:rgba(246,240,228,.95)}
+.npcTag.say i{display:block}
+.npcTag.duel b{color:#ff6a5a}.npcTag.beaten b{color:#b9e0a8}
+#npcPrompt{position:fixed;z-index:6;transform:translate(-50%,10px);display:flex;gap:8px}
+#npcPrompt button{display:flex;align-items:center;gap:6px;padding:5px 12px 5px 5px;border-radius:999px;border:0;background:#120e0bd9;color:#f6eedc;font-weight:900;font-size:13px;letter-spacing:.1em;box-shadow:0 0 0 2px #b01e18;cursor:pointer}
+#npcPrompt b{display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:#f6eedc;color:#120e0b}
+body.touch #npcPrompt b{display:none}
+#dlg{position:fixed;z-index:8;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);width:min(560px,94vw);padding:16px 18px;display:flex;flex-direction:column;gap:10px;pointer-events:auto}
+#dlgName{font-family:"Brush","Segoe UI",system-ui,sans-serif;font-size:22px;color:var(--ink)}
+#dlgName small{font-family:"Segoe UI",system-ui,sans-serif;font-size:11px;letter-spacing:.1em;color:var(--mut);margin-left:6px}
+#dlgText{font-size:15px;line-height:1.45;color:var(--txt)}
+#dlgOpts{display:flex;flex-wrap:wrap;gap:8px}
+#dlgOpts .btn{min-width:0;font-size:14px;padding:7px 12px;display:flex;align-items:center;gap:7px}
+#dlgOpts .btn i{font-style:normal;display:grid;place-items:center;width:20px;height:20px;border-radius:4px;background:#f3e9d2;color:#15110d;font-size:12px}
+body.touch #dlgOpts .btn i{display:none}
 </style>
 </head>
 <body>
@@ -280,6 +314,9 @@ html,body{background:#e9dcc0;color:var(--txt)}
 <div id="joy" class="hidden"><div></div></div>
 <div id="lockHint" class="hidden"><b>CLICK TO FIGHT</b><span>WASD move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · Q Blade Storm · C camera · Esc pause</span></div>
 <div id="floaters"></div>
+<div id="npcTags"></div>
+<div id="npcPrompt" class="hidden"><button id="npcTalk"><b>T</b>Talk</button><button id="npcDuel"><b>R</b>Duel</button></div>
+<div id="dlg" class="panel hidden"><div id="dlgName"></div><p id="dlgText"></p><div id="dlgOpts"></div></div>
 <div id="banner"></div>
 <div id="tut" class="hidden"><div class="hand"></div><span id="tutTxt">SWIPE TO SLICE</span></div>
 
@@ -290,6 +327,7 @@ html,body{background:#e9dcc0;color:var(--txt)}
   <button id="pauseBtn" aria-label="Pause"></button>
   <button id="camBtn" aria-label="Camera view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
   <div id="tutBox" class="panel hidden"><div id="tutStep"></div><div id="tutTitle"></div><div id="tutText"></div></div>
+  <canvas id="minimap" class="hidden" width="170" height="170"></canvas>
   <div id="bossBar" class="hidden"><div id="bossName">ONI WARLORD</div><div id="bossTrack"><div id="bossFill"></div></div></div>
   <div id="wBar"></div>
   <button id="dashBtn" aria-label="Dash">DASH</button>
@@ -305,9 +343,10 @@ html,body{background:#e9dcc0;color:var(--txt)}
 <div id="menu" class="layer hidden">
   <div class="title"><b>NINJA ARSENAL</b><span>Slice Storm</span></div>
   <div id="stageSel"><button id="stPrev">‹</button><div id="stLabel">STAGE 1<small>DUSK</small></div><button id="stNext">›</button></div>
+  <div id="mapSel"><button id="mpPrev" aria-label="Previous map">‹</button><div id="mpLabel">ALL MAPS</div><button id="mpNext" aria-label="Next map">›</button></div>
   <div class="menuBtns">
     <button class="btn red" id="playBtn">Play</button>
-    <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="charsBtn">Ninja</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
+    <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="charsBtn">Ninja</button><button class="btn sm" id="exploreBtn">Explore</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
   </div>
   <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm / finisher · Esc pause</div>
 </div>
@@ -342,6 +381,7 @@ html,body{background:#e9dcc0;color:var(--txt)}
     <div class="row">Camera<button class="tog on" id="setCam"></button></div>
     <div class="row">Graphics<button class="tog on" id="setQ"></button></div>
     <div class="row">Blood<button class="tog" id="setBlood"></button></div>
+    <div class="row">Style<button class="tog on" id="setStyle"></button></div>
     <div class="danger">
       <label class="row" style="justify-content:flex-start;gap:8px;font-weight:600"><input type="checkbox" id="resetChk"> I want to erase all progress</label>
       <button id="resetBtn" disabled><i></i><span>HOLD 3s TO RESET</span></button>

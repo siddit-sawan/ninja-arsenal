@@ -43,7 +43,7 @@ function concat(geos) {
   return g;
 }
 
-export function makePhysics(scene, fx, sfx, arenaR) {
+export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies are kept inside
   const S = { dolls: [], rigids: [], bleed: [] };
   let thudCD = 0;
 
@@ -146,7 +146,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
         pt.o.x = pt.p.x - (pt.p.x - pt.o.x) * 0.55; pt.o.z = pt.p.z - (pt.p.z - pt.o.z) * 0.55;
         if (pt.o.y < pt.p.y) pt.o.y = pt.p.y;
       }
-      const r = Math.hypot(pt.p.x, pt.p.z), R = arenaR + 0.6;
+      const r = Math.hypot(pt.p.x, pt.p.z), R = W.explore ? 1e9 : W.bodyR + 0.6;
       if (r > R) { pt.p.x *= R / r; pt.p.z *= R / r; }
     }
     return move;
@@ -318,7 +318,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
     }
     if (minY < 0) g.position.y -= minY;
     if (touching) b.w.multiplyScalar(0.985);
-    const r = Math.hypot(g.position.x, g.position.z), Rw = arenaR + 0.6;
+    const r = Math.hypot(g.position.x, g.position.z), Rw = W.explore ? 1e9 : W.bodyR + 0.6;
     if (r > Rw) { g.position.x *= Rw / r; g.position.z *= Rw / r; b.v.x *= -0.3; b.v.z *= -0.3; }
     if (touching && b.v.lengthSq() < 0.02 && b.w.lengthSq() < 0.05) { b.still += dt; if (b.still > 0.4) b.asleep = true; } else b.still = 0;
   }
@@ -368,7 +368,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
     while (acc >= H) { acc -= H; steps++; for (const d of awake) moves.set(d, Math.max(moves.get(d) || 0, stepDoll(d))); }
     for (const d of S.dolls.slice()) {
       d.age += dt;
-      if (d.sink > 0) { d.sink += dt; d.group.position.y = -d.sink * 0.35; if (d.sink > 2.2) { removeDoll(d); } continue; }
+      if (d.sink > 0) { d.sink += dt * (d.poof ? 4 : 1); d.group.position.y = -d.sink * 0.35; if (d.sink > 2.2) { removeDoll(d); } continue; }
       if (d.asleep) continue;
       for (const c of d.cons) if (!c.limit && c.carry) orient(c);
       placeParts(d);
@@ -379,7 +379,7 @@ export function makePhysics(scene, fx, sfx, arenaR) {
     }
     for (const b of S.rigids.slice()) {
       b.age += dt;
-      if (b.sink > 0) { b.sink += dt; b.group.position.y -= dt * 0.35; if (b.sink > 2.2) removeRigid(b); continue; }
+      if (b.sink > 0) { b.sink += dt * (b.poof ? 4 : 1); b.group.position.y -= dt * 0.35 * (b.poof ? 4 : 1); if (b.sink > 2.2) removeRigid(b); continue; }
       if (!b.asleep) stepRigid(b, dt);
     }
     // severed stumps keep pumping for a moment
@@ -391,6 +391,13 @@ export function makePhysics(scene, fx, sfx, arenaR) {
     // keep the battlefield readable: the oldest bodies sink away, but only once they have settled on the ground
     const sinkOld = (list, max) => { const live = list.filter(x => !x.sink); if (live.length <= max) return; const ok = live.filter(x => x.asleep || x.age > 8).sort((a, b) => b.age - a.age); for (const x of ok.slice(0, live.length - max)) { if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); } x.sink = 0.001; } };
     sinkOld(S.dolls, MAX_DOLLS); sinkOld(S.rigids, MAX_RIGIDS);
+    // family mode (Blood off): nothing lies around - once a body has settled it vanishes in a puff of ink smoke
+    if (!fx.blood) for (const x of [...S.dolls, ...S.rigids]) {
+      if (x.sink || x.age < 2.5 || !(x.asleep || x.age > 5)) continue;
+      if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); }
+      const c = x.isDoll ? x.pts.reduce((s, p) => s.add(p.p), new V3()).divideScalar(x.pts.length) : x.group.position;
+      fx.dust(c, 10, 0.7); x.sink = 0.001; x.poof = true;
+    }
   };
   // wake a sleeping body (e.g. when stepped on or hit)
   S.wake = b => { if (b.isDoll && b.asleep) unmerge(b); else if (!b.isDoll) { b.asleep = false; b.still = 0; } };
