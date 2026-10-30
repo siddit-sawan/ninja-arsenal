@@ -14,6 +14,9 @@ You move freely around a walled shrine arena while enemies pour in through four 
 | Weapons | 1-5 or mouse wheel | weapon bar |
 | Blade Storm | Q / E / F | STORM button |
 | Finisher (crippled enemy nearby; in the air = aerial finisher) | Q | FINISH button |
+| Pause | P (Esc also pauses, as it releases the mouse) | pause button (top right) |
+
+Keys are bound by their physical position, so other layouts work as they are (AZERTY: ZQSD to move, A for Blade Storm), and every key name shown in the game follows the player's keyboard layout. Ctrl/Cmd+W is held back while the game is fullscreen. The tutorial can be skipped from its card or the pause menu.
 
 Melee enemies wind up before striking (red `!`). Step out of range or dash to dodge. Red arrows at the screen edge show enemies you can't see.
 

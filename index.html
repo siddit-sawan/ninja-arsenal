@@ -140,6 +140,7 @@ body:not(.touch) #dashBtn{display:none}
 #tutTitle{font-size:22px;font-weight:900;font-style:italic;margin:2px 0}
 #tutText{font-size:14px;color:#e8e2da;line-height:1.45}
 #tutBox.done{border-color:#7dff9a;box-shadow:0 0 30px #7dff9a55}
+#tutFoot{margin-top:6px;font-size:12px;color:var(--mut)}#tutSkip{pointer-events:auto;background:none;border:0;color:inherit;font:inherit;text-decoration:underline;cursor:pointer;padding:4px}
 #tutBox.done #tutTitle::after{content:" \2713";color:#7dff9a}
 #tour{position:fixed;inset:0;z-index:30}
 #tourHole{position:fixed;border-radius:14px;border:2px solid var(--gold);box-shadow:0 0 0 9999px rgba(4,3,8,.7);transition:all .3s;pointer-events:none}
@@ -312,7 +313,7 @@ body.touch #dlgOpts .btn i{display:none}
 <div id="vignette"></div><div id="flashW"></div><div id="lbT"></div><div id="lbB"></div>
 <div id="cross" class="hidden"></div>
 <div id="joy" class="hidden"><div></div></div>
-<div id="lockHint" class="hidden"><b>CLICK TO FIGHT</b><span>WASD move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · Q Blade Storm · C camera · Esc pause</span></div>
+<div id="lockHint" class="hidden"><b>CLICK TO FIGHT</b><span>WASD move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · Q Blade Storm · C camera · P pause</span></div>
 <div id="floaters"></div>
 <div id="npcTags"></div>
 <div id="npcPrompt" class="hidden"><button id="npcTalk"><b>T</b>Talk</button><button id="npcDuel"><b>R</b>Duel</button></div>
@@ -326,7 +327,7 @@ body.touch #dlgOpts .btn i{display:none}
   <div id="hudCoins"><span class="coinI"></span><span id="hudCoinV">0</span></div>
   <button id="pauseBtn" aria-label="Pause"></button>
   <button id="camBtn" aria-label="Camera view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
-  <div id="tutBox" class="panel hidden"><div id="tutStep"></div><div id="tutTitle"></div><div id="tutText"></div></div>
+  <div id="tutBox" class="panel hidden"><div id="tutStep"></div><div id="tutTitle"></div><div id="tutText"></div><div id="tutFoot"><button id="tutSkip">Skip tutorial</button><span id="tutSkipKey"></span></div></div>
   <canvas id="minimap" class="hidden" width="170" height="170"></canvas>
   <div id="bossBar" class="hidden"><div id="bossName">ONI WARLORD</div><div id="bossTrack"><div id="bossFill"></div></div></div>
   <div id="wBar"></div>
@@ -348,7 +349,7 @@ body.touch #dlgOpts .btn i{display:none}
     <button class="btn red" id="playBtn">Play</button>
     <div class="menuRow"><button class="btn sm" id="arsenalBtn">Arsenal</button><button class="btn sm" id="charsBtn">Ninja</button><button class="btn sm" id="exploreBtn">Explore</button><button class="btn sm" id="tutorialBtn">Tutorial</button><button class="btn sm" id="settingsBtn">Settings</button></div>
   </div>
-  <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm / finisher · Esc pause</div>
+  <div id="menuHint">WASD move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · Q Blade Storm / finisher · P pause</div>
 </div>
 
 <div id="chars" class="layer hidden">

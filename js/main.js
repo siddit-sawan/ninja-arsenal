@@ -19,7 +19,7 @@ const V3 = THREE.Vector3;
 const UP = new V3(0, 1, 0), YAX = new V3(0, 1, 0);
 const QS = new URLSearchParams(location.search);
 const DEV = ['localhost', '127.0.0.1'].includes(location.hostname);
-let dbgDraw = '', frameCount = 0;   // dev (&dbg): draw calls and triangles of the last frame, shown in the tab title   // dev-only URL switches never work on the live site
+let dbgDraw = '';   // dev (&dbg): draw calls and triangles of the last frame, shown in the tab title   // dev-only URL switches never work on the live site
 const AUTO = DEV && QS.has('auto');                // dev: autopilot swipes (for testing)
 
 /* ============ save ============ */
@@ -146,9 +146,8 @@ function applyQuality() {
     world.shadowR = hi ? 45 : 25;   // how far round you scenery casts shadows
     if (world.lowMat === hi) { world.lowMat = !hi; if (world.map) world.setMap(world.map, true); }   // scenery materials follow the quality
   }
-  // LOW: hard-edged shadow filtering, and the shadow map redrawn every other frame (see frame())
-  renderer.shadowMap.type = hi ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-  renderer.shadowMap.autoUpdate = hi;
+  // Shadows stay soft and are redrawn every frame on LOW too: hard-edged ones shimmered across moving characters,
+  // and at half rate they trailed them every other frame, so runners looked like they were glitching.
   if (composer) { composer.dispose(); composer = null; }
   if (hi) {
     const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 2 });
@@ -1481,27 +1480,34 @@ canvas.addEventListener('wheel', e => {
   selectWeapon(n);
 }, { passive: true });
 addEventListener('contextmenu', e => e.preventDefault());
+// Every control is bound to a key's physical position (e.code), so ZQSD works on AZERTY, the number row picks
+// weapons without Shift, and no key does two things on another layout; the labels shown to the player follow
+// their layout (keyName). Pause is P (Esc also pauses, since it releases the mouse, but it isn't relied on).
 addEventListener('keydown', e => {
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyW' && document.fullscreenElement) e.preventDefault();   // don't close the tab mid-fight
   audio.unlock();
+  learnKey(e);
   keys[e.code] = true;
-  const k = e.key.toLowerCase();
-  if (state === 'play' && talkNPC) {   // dialogue: number keys pick a reply, Esc leaves
-    if (k >= '1' && k <= '9') { const b = $('dlgOpts').children[+k - 1]; if (b) b.click(); }
-    else if (k === 'escape' || k === 't') closeDlg();
+  const c = e.code, num = /^(Digit|Numpad)([1-9])$/.exec(c), n = num ? +num[2] : 0;
+  if (state === 'play' && talkNPC) {   // dialogue: number keys pick a reply, T (or Esc) leaves
+    if (n) { const b = $('dlgOpts').children[n - 1]; if (b) b.click(); }
+    else if (c === 'Escape' || c === 'KeyT') closeDlg();
     return;
   }
   if (state === 'play') {
-    if (stage.explore && (k === 't' || k === 'r')) { const n = nearNPC(); if (n) { if (k === 't') talk(n); else challenge(n); return; } }
-    if (k >= '1' && k <= '5') selectWeapon(WIDS[+k - 1]);
-    else if (k === 'q') { if (!tryFinish()) storm(); }   // Q finishes a crippled enemy nearby, otherwise Blade Storm
-    else if (k === 'e' || k === 'f') storm();
-    else if (k === 'c' || k === 'v') cycleCam();
-    else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') dash();
-    else if (e.code === 'Space' && !e.repeat) jump();
-    else if (k === 'p' || k === 'escape') pause();
-  } else if (state === 'paused' && k === 'p') resumeAndLock();
+    if (stage.explore && (c === 'KeyT' || c === 'KeyR')) { const np = nearNPC(); if (np) { if (c === 'KeyT') talk(np); else challenge(np); return; } }
+    if (n >= 1 && n <= 5) selectWeapon(WIDS[n - 1]);
+    else if (c === 'KeyQ') { if (!tryFinish()) storm(); }   // finishes a crippled enemy nearby, otherwise Blade Storm
+    else if (c === 'KeyE' || c === 'KeyF') storm();
+    else if (c === 'KeyC' || c === 'KeyV') cycleCam();
+    else if (c === 'ShiftLeft' || c === 'ShiftRight') dash();
+    else if (c === 'Space' && !e.repeat) jump();
+    else if (c === 'KeyP' || c === 'Escape') pause();
+  } else if (state === 'paused' && c === 'KeyP') resumeAndLock();
 });
+// Ctrl/Cmd+W closes the tab: while fullscreen, ask the browser to hand that key to the game instead
+document.addEventListener('fullscreenchange', () => { try { if (document.fullscreenElement) navigator.keyboard?.lock?.(['KeyW'])?.catch?.(() => {}); else navigator.keyboard?.unlock?.(); } catch (_) {} });
 addEventListener('keyup', e => { keys[e.code] = false; });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; pause(); });
@@ -1580,6 +1586,26 @@ function selectWeapon(id) {
   if (WEAP[id].mode === 'throw' && !save['tip_' + id]) { toast('Tap or hold to throw'); save['tip_' + id] = 1; }
   if (WEAP[id].mode === 'fling' && !save.tip_fling) { toast('Swipe and release to fling the sickle'); save.tip_fling = 1; }
   buildWBar();
+}
+
+/* ============ key labels (keyboard layout) ============ */
+// The browser's layout map names each physical key in the player's layout (Z for KeyW on AZERTY); where that
+// isn't available, the layout is learned from the keys they press. Texts mark keys as {KeyW}, {Digit1} etc.
+const layoutKeys = new Map();
+try { navigator.keyboard?.getLayoutMap?.().then(m => { m.forEach((v, k) => layoutKeys.set(k, v)); refreshKeyLabels(); }).catch(() => {}); } catch (_) {}
+function learnKey(e) {
+  if (!/^Key[A-Z]$/.test(e.code) || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+  const v = e.key.toLowerCase(); if (layoutKeys.get(e.code) === v) return;
+  layoutKeys.set(e.code, v); refreshKeyLabels();
+}
+const keyName = code => (layoutKeys.get(code) || code.replace(/^(Key|Digit)/, '')).toUpperCase();
+const keyText = s => s.replace(/\{(\w+)\}/g, (_, c) => c === 'MOVE' ? ['KeyW', 'KeyA', 'KeyS', 'KeyD'].map(keyName).join('') : keyName(c));
+function refreshKeyLabels() {
+  $('lockHint').querySelector('span').innerHTML = keyText(`{MOVE} move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · {KeyQ} Blade Storm · {KeyC} camera · {KeyP} pause`);
+  $('menuHint').innerHTML = keyText(`{MOVE} move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · {KeyQ} Blade Storm / finisher · {KeyP} pause`);
+  $('finishTip').firstElementChild.textContent = keyName('KeyQ');
+  $('npcTalk').firstElementChild.textContent = keyName('KeyT'); $('npcDuel').firstElementChild.textContent = keyName('KeyR');
+  if (tut && TUT_STEPS[tut.i]) { const st = TUT_STEPS[tut.i]; $('tutText').textContent = keyText(typeof st.d === 'function' ? st.d() : st.d); }
 }
 
 /* ============ UI ============ */
@@ -1770,6 +1796,7 @@ $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.targ
 click('resumeBtn', resumeAndLock);
 click('restartBtn', () => { bankRunCoins(); if (stage.tutorial) startTutorial(); else if (stage.explore) startExplore(stage.map); else playStage(stage.n, true); });
 click('skipTutBtn', () => { save.tutDone = true; persist(); toMenu(); });
+click('tutSkip', () => { save.tutDone = true; persist(); toMenu(); });   // the tutorial card's own skip button
 click('quitBtn', toMenu);
 click('resNext', () => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, true));
 click('resMenu', toMenu);
@@ -2006,8 +2033,8 @@ const TEMPER = {
   wise: { hi: ['Ah. The young one with sharp eyes.', 'Sit with me a while.', 'Every path leads back here.'], win: 'The student surpasses the master... today.', lose: 'Defeat is a teacher. Listen to it.', accept: 'Show me what your hands have learned.', beaten: 'You have grown since we crossed blades.', idle: ['Still water, still mind.', 'The blade follows the eye.', 'The charms are restless today.'] },
 };
 const TIPS = [
-  'Cut low across the legs and a foe drops to his knees. Then press Q for a finisher.',
-  'Jump before you press Q and the finisher happens in the air. Twice the reward.',
+  'Cut low across the legs and a foe drops to his knees. Then press {KeyQ} for a finisher.',
+  'Jump before you press {KeyQ} and the finisher happens in the air. Twice the reward.',
   'A Storm unleashed in mid-air becomes a Sky Storm: everything below is marked.',
   'A red ! means a strike is coming. Dash or jump and it will miss you.',
   'Slice falling halves again before they land. Air slices pay extra.',
@@ -2107,7 +2134,7 @@ function dlg(e, text) {
   const opts = [
     ['Who are you?', () => dlg(e, `I am ${N.name} of the ${N.clan.n} clan, a${/^[AEIOU]/.test(RANKS[N.rank].title) ? 'n' : ''} ${RANKS[N.rank].title.toLowerCase()} of rank ${N.rank}. ${N.clan.lore}`)],
     ['Heard any rumours?', () => dlg(e, rumour(e))],
-    ['Teach me something.', () => dlg(e, pickOne(TIPS))],
+    ['Teach me something.', () => dlg(e, keyText(pickOne(TIPS)))],
     [N.beaten ? 'Rematch!' : 'I challenge you to a duel!', () => challenge(e)],
     ['Farewell.', closeDlg],
   ];
@@ -2201,9 +2228,9 @@ function spawnFront(kind, n, d, spread = 0.45) {
 const TUT_STEPS = [
   { t: 'Look around', d: () => sdk.touch ? 'Touch the left side of the screen and push the stick left or right to turn.' : 'Move the mouse to look around the arena.',
     check: () => tut.yawAcc > 2.4 },
-  { t: 'Move', d: () => sdk.touch ? 'Push the stick up to run forward, down to back off.' : 'Run around with W A S D.',
+  { t: 'Move', d: () => sdk.touch ? 'Push the stick up to run forward, down to back off.' : 'Run around with {KeyW} {KeyA} {KeyS} {KeyD}.',
     check: () => tut.dist > 7 },
-  { t: 'Dash', d: () => sdk.touch ? 'Tap DASH to dash in the direction you are moving. Dashing dodges attacks.' : 'Press Shift (or Space) to dash. Dashing dodges attacks.',
+  { t: 'Dash', d: () => sdk.touch ? 'Tap DASH to dash in the direction you are moving. Dashing dodges attacks.' : 'Press Shift to dash. Dashing dodges attacks.',
     check: () => tut.flags.dash },
   { t: 'Jump & flip', d: () => sdk.touch ? 'Tap JUMP, then tap it again in the air for a front flip. Jumping over a strike dodges it.' : 'Press Space to jump, and Space again in the air for a front flip. Jumping over a strike dodges it.',
     check: () => tut.flags.flip },
@@ -2217,11 +2244,11 @@ const TUT_STEPS = [
     init: () => { trial = 'shuriken'; buildWBar(); spawnFront('dummy', 3, 11, 0.3); }, check: () => tut.kills >= 3 },
   { t: 'Dodge', d: 'A ninja attacks! A red ! means a strike is coming: dash or step away, then slice him.',
     init: () => { selectWeapon('katana'); spawnFront('grunt', 1, 9); }, check: () => !enemies.length },
-  { t: 'Finishers', d: () => sdk.touch ? 'Swipe LOW across his legs to cripple him instead of killing him. Then get close and tap FINISH (or JUMP first for an aerial finisher).' : 'Slice LOW across his legs to cripple him instead of killing him. Then get close and press Q to finish him (jump first for an aerial finisher).',
+  { t: 'Finishers', d: () => sdk.touch ? 'Swipe LOW across his legs to cripple him instead of killing him. Then get close and tap FINISH (or JUMP first for an aerial finisher).' : 'Slice LOW across his legs to cripple him instead of killing him. Then get close and press {KeyQ} to finish him (jump first for an aerial finisher).',
     init: () => { tut.wounds = true; tutTarget(); }, check: () => { if (!tut.flags.finish && !enemies.length) tutTarget(); return tut.flags.finish && !enemies.length; } },
-  { t: 'Blade Storm', d: () => sdk.touch ? 'Your STORM gauge is full. Tap STORM to slice every enemy around you.' : 'Your Storm gauge is full. Press Q to slice every enemy around you.',
+  { t: 'Blade Storm', d: () => sdk.touch ? 'Your STORM gauge is full. Tap STORM to slice every enemy around you.' : 'Your Storm gauge is full. Press {KeyQ} to slice every enemy around you.',
     init: () => { ult = 100; spawnFront('grunt', 4, 10, 0.5); }, check: () => tut.flags.storm && !enemies.length },
-  { t: 'Camera views', d: () => sdk.touch ? 'Tap the camera button (top right) to switch between first person, third person and wide view.' : 'Press C (or the camera button, top right) to switch between first person, third person and wide view.',
+  { t: 'Camera views', d: () => sdk.touch ? 'Tap the camera button (top right) to switch between first person, third person and wide view.' : 'Press {KeyC} (or the camera button, top right) to switch between first person, third person and wide view.',
     check: () => (tut.flags.cam || 0) >= 2 },
 ];
 function tutTarget() { spawnFront('grunt', 1, 4.5); enemies[enemies.length - 1].state = 'idle'; }   // a ninja who stands still for practice
@@ -2257,7 +2284,8 @@ function nextTutStep() {
   if (st.init) st.init();
   $('tutStep').textContent = `STEP ${tut.i + 1} / ${TUT_STEPS.length}`;
   $('tutTitle').textContent = st.t;
-  $('tutText').textContent = typeof st.d === 'function' ? st.d() : st.d;
+  $('tutText').textContent = keyText(typeof st.d === 'function' ? st.d() : st.d);
+  $('tutSkipKey').textContent = sdk.touch ? '' : keyText(' · {KeyP} = pause / skip');
   $('tutBox').classList.remove('done');
 }
 function updTutorial(dt) {
@@ -2494,7 +2522,6 @@ function step(rdt, now, draw = true) {
   updateVM(rdt, T);
   if (!draw) return;
   if (DEV && QS.has('dbg')) renderer.info.autoReset = false;   // dev: count every pass of the frame
-  if (!renderer.shadowMap.autoUpdate) renderer.shadowMap.needsUpdate = (frameCount++ & 1) === 0;
   if (composer) composer.render(); else renderer.render(scene, camera);
   if (DEV && QS.has('dbg')) { dbgDraw = `dc=${renderer.info.render.calls} tri=${(renderer.info.render.triangles / 1000).toFixed(0)}k geo=${renderer.info.memory.geometries} prog=${renderer.info.programs.length}`; renderer.info.reset(); }
   tuneRes(rawDt);
@@ -2544,7 +2571,7 @@ async function boot() {
   phys.clear();
   applyAudio();
   loadingStop();
-  state = 'menu'; showLayer('menu'); updMenu(); updToggles();
+  state = 'menu'; showLayer('menu'); updMenu(); updToggles(); refreshKeyLabels();
   const unlockMusic = () => { music('menu'); removeEventListener('pointerdown', unlockMusic); removeEventListener('keydown', unlockMusic); };
   addEventListener('pointerdown', unlockMusic); addEventListener('keydown', unlockMusic);
   requestAnimationFrame(t => { last = t; frame(t); });
