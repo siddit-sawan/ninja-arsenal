@@ -1,10 +1,12 @@
 // Environment: a shared sky, sun, fog and falling particles, plus five hand-laid maps (MAPS) rebuilt on demand.
 // Two looks: 'real' (natural colour, lit by a sun and a cloudy sky) and 'ink' (the original sumi-e ink on parchment).
 // Every map has a round fighting arena (enemies come in through its gates) inside a square tile that repeats
-// forever in every direction: rings (walls, moats, house rows) only open at the gates, and solid props block movement.
+// forever in every direction. Only real things block you: each wall segment, house, rock, trunk and post has its own
+// collider (low ones can be jumped), and water can be waded. In explore mode every prop can be cut (W.cutProp).
 // After a map is built its static meshes are merged per material, so the 3x3 block of tiles round the camera stays cheap.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MATS } from './slicer.js';
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 // seeded generator, so a map is laid out the same way every time (hidden charms keep their places)
@@ -97,7 +99,7 @@ const PAINT = {
 export function buildWorld(scene, renderer, quality) {
   const hi = quality === 'high';
   const W = { style: 'real', map: null, arenaR: 23.2, wallR: 24.5, bodyR: 23.8, exploreR: 80, tile: 160, camR: 28, leapH: 3.3, explore: false,
-    colliders: [], gates: [], rings: [], charms: [], dummies: [], mm: [], particles: 'petals' };
+    colliders: [], gates: [], rings: [], water: [], charms: [], dummies: [], mm: [], particles: 'petals' };
 
   // ---------- sky: a cloudy daylight sky with a sun or moon (real) or paper with an ink-bleed sun (ink)
   const skyU = { top: { value: new THREE.Color() }, mid: { value: new THREE.Color() }, bot: { value: new THREE.Color() },
@@ -242,21 +244,27 @@ export function buildWorld(scene, renderer, quality) {
     for (let i = Math.floor((o.x - rad) / CELL); i <= Math.floor((o.x + rad) / CELL); i++)
       for (let j = Math.floor((o.z - rad) / CELL); j <= Math.floor((o.z + rad) / CELL); j++) { const k = cellKey(i, j); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(o); }
   }
+  // Props: every tree, stalk, rock, lantern, house, wall segment... remembers its instanced parts, its slice of the
+  // merged tile meshes and its colliders, so the whole thing can be lifted out and cut (cap = colour of the cut face)
+  let props = [], curProp = null;
+  const beginProp = cap => (curProp = { cap, inst: [], ranges: [], col: [], box: new THREE.Box3(), cut: false }, props.push(curProp), curProp);
+  const endProp = () => { curProp = null; };
   const add = (geo, m, x, y, z, shadow = true, parent = G) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; parent.add(o); return o; };
-  const grp = (x, z, ry = 0, s = 1) => { const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; g.scale.setScalar(s); G.add(g); return g; };
-  // solid circle: blocks the player everywhere, and enemies too when it's in or near the arena
-  function solid(x, z, rad, dot = true) {
-    const o = { x, z, r: rad }; gridAdd(o, rad);
+  const grp = (x, z, ry = 0, s = 1) => { const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; g.scale.setScalar(s); if (curProp) g.userData.prop = curProp; G.add(g); return g; };
+  // solid circle: blocks the player everywhere, and enemies too when it's in or near the arena; anything jumping
+  // higher than h clears it
+  function solid(x, z, rad, dot = true, h = 99) {
+    const o = { x, z, r: rad, h }; gridAdd(o, rad); if (curProp) curProp.col.push(o);
     if (Math.hypot(x, z) < W.wallR + 4) W.colliders.push(o);
     if (dot && rad >= 0.45) W.mm.push({ k: 'c', x, z, r: rad, col: '#4a4038' });
   }
   // solid oriented box (houses, halls)
-  function solidBox(x, z, hw, hd, rot, col = '#6b5a48') {
-    const o = { x, z, hw, hd, c: Math.cos(rot), s: Math.sin(rot), box: true }; gridAdd(o, Math.hypot(hw, hd)); boxes.push(o);
-    W.mm.push({ k: 'r', x, z, hw, hd, rot, col });
+  function solidBox(x, z, hw, hd, rot, col = '#6b5a48', h = 99, mm = true) {
+    const o = { x, z, hw, hd, c: Math.cos(rot), s: Math.sin(rot), box: true, h }; gridAdd(o, Math.hypot(hw, hd)); boxes.push(o); if (curProp) curProp.col.push(o);
+    if (mm) W.mm.push({ k: 'r', x, z, hw, hd, rot, col });
   }
-  // a ring that can only be crossed at its gaps (angles); w = half thickness
-  function ring(rad, w, gaps, gapHalf, col = '#5a5048') { W.rings.push({ r: rad, w, gaps, gh: Math.asin(Math.min(0.99, gapHalf / rad)) }); W.mm.push({ k: 'ring', r: rad, w, gaps, gh: Math.asin(Math.min(0.99, gapHalf / rad)), col }); }
+  // a ring outline on the minimap (walls, fences); what blocks is each segment's own collider
+  function ring(rad, w, gaps, gapHalf, col = '#5a5048') { W.mm.push({ k: 'ring', r: rad, w, gaps, gh: Math.asin(Math.min(0.99, gapHalf / rad)), col }); }
   const inGap = (a, gaps, gh) => gaps.some(g => Math.abs(angDiff(a, g)) < gh);
   // enemy entrances: they gather outside at (ox, oz) and walk in through the gap to (ix, iz)
   function gate(a) {
@@ -285,25 +293,25 @@ export function buildWorld(scene, renderer, quality) {
     const m = new THREE.Mesh(new THREE.CircleGeometry(rad, 48), waterMat()); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.04, z); m.receiveShadow = true; G.add(m);
     const bank = new THREE.Mesh(new THREE.RingGeometry(rad, rad + 0.9, 48), texMat('rockface', [6, 1])); bank.rotation.x = -Math.PI / 2; bank.position.set(x, 0.05, z); bank.receiveShadow = true; G.add(bank);
     keepOut(x, z, rad + 2);
-    if (solidToo) { const o = { x, z, r: rad - 0.4 }; gridAdd(o, rad); }
+    W.water.push({ x, z, r: rad });
     W.mm.push({ k: 'c', x, z, r: rad, col: '#4f7f95' });
   }
   function waterRect(x, z, w, d, rot = 0) {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), waterMat()); m.rotation.set(-Math.PI / 2, 0, rot); m.position.set(x, 0.035, z); m.receiveShadow = true; G.add(m);
-    W.mm.push({ k: 'r', x, z, hw: w / 2, hd: d / 2, rot: -rot, col: '#5d8f8a' });
+    W.mm.push({ k: 'r', x, z, hw: w / 2, hd: d / 2, rot: -rot, col: '#5d8f8a' }); W.water.push({ x, z, hw: w / 2, hd: d / 2 });
   }
 
   // instanced batches, flushed at the end of each map build
   const batches = {};
   const _dm = new THREE.Object3D();
-  function inst(name, x, y, z, rx, ry, rz, sx, sy, sz, col) {
-    (batches[name] = batches[name] || []).push([x, y, z, rx, ry, rz, sx, sy, sz, col]);
+  function inst(name, ...v) {   // x, y, z, rx, ry, rz, sx, sy, sz, colour
+    const L = batches[name] = batches[name] || []; if (curProp) curProp.inst.push({ name, i: L.length }); L.push(v);
   }
   function flush(name, geo, m, shadow = true) {
     const L = batches[name]; if (!L || !L.length) return;
     const im = new THREE.InstancedMesh(geo, m, L.length);
     L.forEach((v, i) => { _dm.position.set(v[0], v[1], v[2]); _dm.rotation.set(v[3], v[4], v[5]); _dm.scale.set(v[6], v[7], v[8]); _dm.updateMatrix(); im.setMatrixAt(i, _dm.matrix); if (v[9] !== undefined) im.setColorAt(i, _c.set(tone(v[9]))); });
-    im.castShadow = shadow; im.receiveShadow = true; G.add(im); delete batches[name];
+    im.name = name; im.castShadow = shadow; im.receiveShadow = true; G.add(im); delete batches[name];
     made.push(geo);
   }
 
@@ -322,13 +330,14 @@ export function buildWorld(scene, renderer, quality) {
     for (const sx of [-1, 1]) { const e = add(new THREE.BoxGeometry(1.2, 0.42, 0.66), bm, sx * 5.5, 6.32, 0, true, parent); e.rotation.z = sx * 0.28; }
   }
   function toriiAt(x, z, ry, s = 1, block = true) {
-    const g = grp(x, z, ry, s); torii(g);
+    beginProp('wood'); const g = grp(x, z, ry, s); torii(g);
     if (block) for (const sx of [-1, 1]) solid(x + Math.cos(ry) * 3.6 * s * sx, z - Math.sin(ry) * 3.6 * s * sx, 0.45 * s, false);
+    endProp();
   }
   let stoneMat = null;
   function lantern(x, z, s = 1, collide = false) {
     stoneMat = stoneMat || mat(0x8a857c, { r: 0.95, flat: true });
-    const g = grp(x, z, 0, s);
+    beginProp('stone'); const g = grp(x, z, 0, s);
     add(new THREE.CylinderGeometry(0.42, 0.5, 0.25, 6), stoneMat, 0, 0.12, 0, true, g);
     add(new THREE.CylinderGeometry(0.13, 0.17, 1.0, 6), stoneMat, 0, 0.75, 0, true, g);
     add(new THREE.CylinderGeometry(0.36, 0.3, 0.16, 6), stoneMat, 0, 1.32, 0, true, g);
@@ -337,14 +346,15 @@ export function buildWorld(scene, renderer, quality) {
     add(new THREE.BoxGeometry(0.3, 0.22, 0.44), W.glowMat, 0, 1.6, 0, false, g);
     add(new THREE.ConeGeometry(0.62, 0.42, 6), stoneMat, 0, 1.98, 0, true, g);
     add(new THREE.SphereGeometry(0.09, 6, 4), stoneMat, 0, 2.24, 0, true, g);
-    if (collide) solid(x, z, 0.55 * s); else { const o = { x, z, r: 0.5 * s }; gridAdd(o, 0.5 * s); }
+    solid(x, z, 0.5 * s, collide, 2.25 * s); endProp();
   }
   // bamboo: instanced stalks with node bands and leaf clusters
   function bamboo(x, z, collide = true) {
-    const h = r(7, 14);
+    const h = r(7, 14); beginProp('plant');
     inst('stalk', x, 0, z, r(-0.06, 0.06), r(0, 6), r(-0.06, 0.06), r(0.8, 1.25), h, r(0.8, 1.25), new THREE.Color().setHSL(r(0.17, 0.24), r(0.3, 0.5), r(0.3, 0.45)).getHex());
     for (let k = 0; k < 3; k++) inst('bleaf', x + r(-0.9, 0.9), h * r(0.62, 1), z + r(-0.9, 0.9), r(0, 3), r(0, 3), r(0, 3), r(0.9, 1.6), r(0.35, 0.6), r(0.9, 1.6), new THREE.Color().setHSL(r(0.2, 0.28), r(0.35, 0.55), r(0.22, 0.34)).getHex());
-    if (collide) { const o = { x, z, r: 0.16 }; gridAdd(o, 0.16); }
+    if (collide) solid(x, z, 0.16, false);
+    endProp();
   }
   function flushBamboo() {
     const sg = new THREE.CylinderGeometry(0.075, 0.09, 1, 7, 9, false).translate(0, 0.5, 0);
@@ -356,9 +366,9 @@ export function buildWorld(scene, renderer, quality) {
   }
   // conifer: trunk + three stacked cones (snowy: lighter tips)
   function pine(x, z, s = 1, collide = true, snowy = false) {
-    inst('ptrunk', x, 0, z, 0, 0, 0, s, s, s, 0x4a3524);
+    beginProp('wood'); inst('ptrunk', x, 0, z, 0, 0, 0, s, s, s, 0x4a3524);
     for (let k = 0; k < 3; k++) inst('pcone', x, s * (2.2 + k * 1.6), z, 0, r(0, 6), 0, s * (2.3 - k * 0.55), s * 2.6, s * (2.3 - k * 0.55), snowy && k < 2 ? 0x8fa6a0 : new THREE.Color().setHSL(r(0.3, 0.36), r(0.3, 0.45), r(0.15, 0.24)).getHex());
-    if (collide) solid(x, z, 0.5 * s, false); else { const o = { x, z, r: 0.45 * s }; gridAdd(o, 0.45 * s); }
+    solid(x, z, 0.4 * s, false); endProp();
   }
   function flushPines(snowy) {
     flush('ptrunk', new THREE.CylinderGeometry(0.16, 0.26, 2.6, 7).translate(0, 1.3, 0), mat(0xffffff, { r: 0.95 }));
@@ -366,10 +376,10 @@ export function buildWorld(scene, renderer, quality) {
   }
   // broadleaf tree (maple / sakura-like when pink)
   function tree(x, z, s = 1, leaf = null, collide = true) {
-    inst('ttrunk', x, 0, z, r(-0.05, 0.05), r(0, 6), r(-0.05, 0.05), s, s, s, 0x4b3a2c);
+    beginProp('wood'); inst('ttrunk', x, 0, z, r(-0.05, 0.05), r(0, 6), r(-0.05, 0.05), s, s, s, 0x4b3a2c);
     const lc = leaf ?? new THREE.Color().setHSL(r(0.22, 0.3), r(0.35, 0.5), r(0.22, 0.32)).getHex();
     for (let k = 0; k < 4; k++) inst('tleaf', x + r(-1.2, 1.2) * s, s * r(3.4, 4.6), z + r(-1.2, 1.2) * s, r(0, 3), r(0, 3), r(0, 3), s * r(1.1, 1.6), s * r(0.8, 1.1), s * r(1.1, 1.6), lc);
-    if (collide) solid(x, z, 0.4 * s, false); else { const o = { x, z, r: 0.4 * s }; gridAdd(o, 0.4 * s); }
+    solid(x, z, 0.35 * s, false); endProp();
   }
   function flushTrees() {
     flush('ttrunk', new THREE.CylinderGeometry(0.16, 0.3, 3.6, 7).translate(0, 1.8, 0), mat(0xffffff, { r: 0.95 }));
@@ -377,8 +387,9 @@ export function buildWorld(scene, renderer, quality) {
   }
   // boulders: a lumpy icosahedron (snowy maps put snow on top through vertex colours)
   function rock(x, z, s, collide = true, sq = 0.7) {
-    inst('rock', x, s * 0.25, z, r(0, 3), r(0, 6), r(0, 0.3), s * r(0.9, 1.2), s * sq * r(0.8, 1.1), s * r(0.9, 1.2), new THREE.Color().setHSL(r(0.08, 0.12), r(0.04, 0.1), r(0.38, 0.52)).getHex());
-    if (collide) solid(x, z, s * 0.9);
+    beginProp('stone'); inst('rock', x, s * 0.25, z, r(0, 3), r(0, 6), r(0, 0.3), s * r(0.9, 1.2), s * sq * r(0.8, 1.1), s * r(0.9, 1.2), new THREE.Color().setHSL(r(0.08, 0.12), r(0.04, 0.1), r(0.38, 0.52)).getHex());
+    if (collide) solid(x, z, s * 0.9, true, s * (0.25 + sq));   // low boulders can be jumped
+    endProp();
   }
   function flushRocks(snowy) {
     const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position, col = [];
@@ -391,7 +402,7 @@ export function buildWorld(scene, renderer, quality) {
   }
   // timber house with a tiled (or thatched) gable roof; the door side faces +z of its own frame
   function house(x, z, ry, w = 7, d = 5.5, h = 3.2, o = {}) {
-    const g = grp(x, z, ry);
+    beginProp('wood'); const g = grp(x, z, ry);
     const wall = o.wall || (o.wood ? texMat('wood', [w / 3, h / 3]) : texMat('plaster', [1, 1])), timber = mat(0x3c2a1c, { r: 0.8 });
     add(new THREE.BoxGeometry(w, h, d), wall, 0, h / 2, 0, true, g);
     add(new THREE.BoxGeometry(w + 0.1, 0.22, d + 0.1), timber, 0, h * 0.45, 0, true, g);
@@ -403,11 +414,11 @@ export function buildWorld(scene, renderer, quality) {
     const rg = new THREE.ExtrudeGeometry(rs, { depth: w + 0.9, bevelEnabled: false }).translate(0, 0, -(w + 0.9) / 2);
     const roofM = o.thatch ? texMat('thatch', [2, 2]) : texMat('roof', [2, 1]);
     const rm = add(rg, roofM, 0, h, 0, true, g); rm.rotation.y = Math.PI / 2;
-    solidBox(x, z, w / 2 + 0.2, d / 2 + 0.2, ry);
+    solidBox(x, z, w / 2 + 0.2, d / 2 + 0.2, ry); endProp();
     return g;
   }
   function pagoda(x, z, s) {
-    const g = grp(x, z, 0, s);
+    beginProp('wood'); const g = grp(x, z, 0, s);
     const wall = mat(0x8b2f22, { r: 0.75, keep: true }), roofM = mat(0x2a2c31, { r: 0.65, side: THREE.DoubleSide }), gold = mat(0xb08d4a, { r: 0.45, m: 0.5 });
     add(new THREE.BoxGeometry(7, 1.2, 7), texMat('stone', [2, 1]), 0, 0.6, 0, true, g);
     let y = 1.2;
@@ -418,27 +429,27 @@ export function buildWorld(scene, renderer, quality) {
       y += 2.1;
     }
     add(new THREE.CylinderGeometry(0.06, 0.12, 3.2, 6), gold, 0, y + 1.2, 0, true, g);
-    solid(x, z, 3.4 * s);
+    solidBox(x, z, 3.5 * s, 3.5 * s, 0); endProp();
   }
   function hall(x, z, ry, s = 1) {
-    const g = grp(x, z, ry, s);
+    beginProp('wood'); const g = grp(x, z, ry, s);
     add(new THREE.BoxGeometry(14, 1.2, 9), texMat('stone', [3, 2]), 0, 0.6, 0, true, g);
     add(new THREE.BoxGeometry(11, 4.2, 7), texMat('wood', [4, 2]), 0, 3.3, 0, true, g);
     for (let i = -2; i <= 2; i++) add(new THREE.CylinderGeometry(0.22, 0.22, 4.2, 10), red(), i * 2.6, 3.3, 3.6, true, g);
     const rf = add(new THREE.CylinderGeometry(3, 9.6, 3, 4), texMat('roof', [4, 1]), 0, 6.9, 0, true, g); rf.rotation.y = Math.PI / 4; rf.scale.z = 0.7;
     add(new THREE.BoxGeometry(3, 3, 0.2), W.glowMat, 0, 2.8, 3.55, false, g);
-    solidBox(x, z, 7 * s, 4.6 * s, ry);
+    solidBox(x, z, 7 * s, 4.6 * s, ry); endProp();
   }
   function hokora(x, z, ry, s = 1) {   // tiny wayside shrine
-    const g = grp(x, z, ry, s);
+    beginProp('wood'); const g = grp(x, z, ry, s);
     add(new THREE.BoxGeometry(1.4, 0.5, 1.2), texMat('stone', [1, 1]), 0, 0.25, 0, true, g);
     add(new THREE.BoxGeometry(1, 1.0, 0.8), texMat('wood', [1, 1]), 0, 1.0, 0, true, g);
     const rf = add(new THREE.CylinderGeometry(0.2, 1.05, 0.6, 4), mat(0x2c2e33, { r: 0.6 }), 0, 1.8, 0, true, g); rf.rotation.y = Math.PI / 4;
     add(new THREE.BoxGeometry(0.5, 0.4, 0.05), W.glowMat, 0, 1.0, 0.42, false, g);
-    solid(x, z, 0.9 * s);
+    solidBox(x, z, 0.7 * s, 0.6 * s, ry, '#6b5a48', 1.9 * s); endProp();
   }
   // ring of instanced wall segments with openings at the gates
-  function wallRing(rad, gaps, gapHalf, layers) {
+  function wallRing(rad, gaps, gapHalf, layers, h = 99, cap = 'stone') {
     const segLen = 2.0, segN = Math.ceil(TAU * rad / segLen), gh = Math.asin(Math.min(0.99, gapHalf / rad));
     const mats = [];
     for (let i = 0; i < segN; i++) {
@@ -446,11 +457,13 @@ export function buildWorld(scene, renderer, quality) {
       if (inGap(a, gaps, gh + 0.03)) continue;
       mats.push(a);
     }
-    for (const L of layers) {
-      const im = new THREE.InstancedMesh(new THREE.BoxGeometry(segLen + 0.1, L.h, L.d), L.m, mats.length);
-      mats.forEach((a, i) => { _dm.position.set(Math.sin(a) * rad, L.y, -Math.cos(a) * rad); _dm.rotation.set(0, -a, 0); _dm.scale.set(1, 1, 1); _dm.updateMatrix(); im.setMatrixAt(i, _dm.matrix); });
+    const D = Math.max(...layers.map(L => L.d)) / 2;
+    const segs = mats.map(a => { const P = beginProp(cap), [x, z] = polar(a, rad); solidBox(x, z, segLen / 2 + 0.05, D, -a, '', h, false); endProp(); return P; });
+    layers.forEach((L, li) => {
+      const im = new THREE.InstancedMesh(new THREE.BoxGeometry(segLen + 0.1, L.h, L.d), L.m, mats.length); im.name = 'wall' + li;
+      mats.forEach((a, i) => { segs[i].inst.push({ name: im.name, i }); _dm.position.set(Math.sin(a) * rad, L.y, -Math.cos(a) * rad); _dm.rotation.set(0, -a, 0); _dm.scale.set(1, 1, 1); _dm.updateMatrix(); im.setMatrixAt(i, _dm.matrix); });
       im.castShadow = im.receiveShadow = true; G.add(im); made.push(im.geometry);
-    }
+    });
   }
   function mountains(snowy, n = 11) {
     W.mountMat = keepMat(new THREE.MeshBasicMaterial({ color: 0x8a8070, fog: false })); W.mountFar = keepMat(new THREE.MeshBasicMaterial({ color: 0xb0a690, fog: false }));
@@ -504,7 +517,7 @@ export function buildWorld(scene, renderer, quality) {
         path(px, pz, qx, qz, 7, 'stone');
         for (const sx of [-1, 1]) for (const d of [W.wallR + 6, W.wallR + 22]) { const [lx, lz] = polar(a, d); lantern(lx - Math.cos(a) * 4.6 * sx, lz - Math.sin(a) * 4.6 * sx, 1, false); }
       }
-      wallRing(W.wallR + 0.35, gA, 4.3, [{ h: 1.1, d: 0.7, y: 0.55, m: texMat('plaster', [1, 1]) }, { h: 0.2, d: 1.0, y: 1.2, m: mat(0x2e3036, { r: 0.6 }) }]);
+      wallRing(W.wallR + 0.35, gA, 4.3, [{ h: 1.1, d: 0.7, y: 0.55, m: texMat('plaster', [1, 1]) }, { h: 0.2, d: 1.0, y: 1.2, m: mat(0x2e3036, { r: 0.6 }) }], 1.3);   // a double jump clears it
       ring(W.wallR + 0.35, 0.5, gA, 4.3);
       for (let k = 0; k < 4; k++) { const [x, z] = polar(Math.PI / 4 + k * Math.PI / 2, 11.5); lantern(x, z, 1.35, true); }
       // landmarks out in the forest
@@ -528,12 +541,12 @@ export function buildWorld(scene, renderer, quality) {
       floorDisc(W.wallR + 1.5, 'moss', 10);
       // low bamboo fence round the clearing
       const fence = mat(0x9a8a5a, { r: 0.8 });
-      wallRing(W.wallR + 0.4, gA, 4, [{ h: 0.12, d: 0.12, y: 0.45, m: fence }, { h: 0.12, d: 0.12, y: 0.9, m: fence }]);
-      { const segN = Math.ceil(TAU * (W.wallR + 0.4) / 1.0), gh = Math.asin(4 / (W.wallR + 0.4)); for (let i = 0; i < segN; i++) { const a = i / segN * TAU; if (inGap(a, gA, gh)) continue; const [x, z] = polar(a, W.wallR + 0.4); inst('post', x, 0, z, 0, 0, 0, 1, 1, 1, 0x8a7a4a); } flush('post', new THREE.CylinderGeometry(0.06, 0.07, 1.2, 6).translate(0, 0.6, 0), mat(0xffffff, { r: 0.8 })); }
+      wallRing(W.wallR + 0.4, gA, 4, [{ h: 0.12, d: 0.12, y: 0.45, m: fence }, { h: 0.12, d: 0.12, y: 0.9, m: fence }], 0.95, 'wood');   // hop the fence
+      { const segN = Math.ceil(TAU * (W.wallR + 0.4) / 1.0), gh = Math.asin(4 / (W.wallR + 0.4)); for (let i = 0; i < segN; i++) { const a = i / segN * TAU; if (inGap(a, gA, gh)) continue; const [x, z] = polar(a, W.wallR + 0.4); beginProp('wood'); inst('post', x, 0, z, 0, 0, 0, 1, 1, 1, 0x8a7a4a); endProp(); } flush('post', new THREE.CylinderGeometry(0.06, 0.07, 1.2, 6).translate(0, 0.6, 0), mat(0xffffff, { r: 0.8 })); }
       ring(W.wallR + 0.4, 0.4, gA, 4);
       for (const a of gA) { const [px, pz] = polar(a, W.wallR), [qx, qz] = polar(a, W.exploreR); path(px, pz, qx, qz, 4.5, 'dirt', '#8b7356'); for (const d of [W.wallR + 8, W.wallR + 30]) { const [lx, lz] = polar(a, d); lantern(lx + Math.cos(a) * 3, lz + Math.sin(a) * 3, 0.9); } }
       // clumps of bamboo inside the clearing to fight around
-      for (let k = 0; k < 4; k++) { const a = TAU / 6 + k * TAU / 4 + r(-0.2, 0.2), [cx, cz] = polar(a, r(10, 13)); for (let i = 0; i < 12; i++) bamboo(cx + r(-1.1, 1.1), cz + r(-1.1, 1.1), false); solid(cx, cz, 1.6); }
+      for (let k = 0; k < 4; k++) { const a = TAU / 6 + k * TAU / 4 + r(-0.2, 0.2), [cx, cz] = polar(a, r(10, 13)); for (let i = 0; i < 12; i++) bamboo(cx + r(-1.1, 1.1), cz + r(-1.1, 1.1), true); }
       rock(-14, 5, 1.5); rock(15, 4, 1.2); hokora(0, -17.5, 0, 0.9);
       // the forest outside: clearings with a pond, a hidden shrine and a stone circle
       waterDisc(-40, 40, 8); for (let i = 0; i < 9; i++) { const a = i / 9 * TAU; rock(-40 + Math.sin(a) * 9.4, 40 - Math.cos(a) * 9.4, r(0.5, 1), true, 0.6); }
@@ -557,25 +570,22 @@ export function buildWorld(scene, renderer, quality) {
         const a = (i + 0.5) / 20 * TAU; if (inGap(a, gA, gh + 0.12)) continue;
         const [x, z] = polar(a, HR); house(x, z, -a, r(6, 7.2), 5, r(3, 3.8), { thatch: R() < 0.35, wood: R() < 0.4 });
       }
-      ring(HR, 2.8, gA, 4.2, '#6b5a48');
       for (const a of gA) {
         const [px, pz] = polar(a, W.wallR), [qx, qz] = polar(a, W.exploreR); path(px, pz, qx, qz, 6, 'dirt', '#8b7356');
         for (let d = 40; d < 78; d += 11) for (const sx of [-1, 1]) { if (R() < 0.25) continue; const [x, z] = polar(a, d); house(x - Math.cos(a) * 8 * sx, z - Math.sin(a) * 8 * sx, Math.atan2(sx * Math.cos(a), sx * Math.sin(a)), r(6, 7.5), 5, r(3, 3.6), { thatch: R() < 0.5, wood: R() < 0.5 }); }
       }
       // the square: a well, a cart, barrels and crates
-      { const g = grp(-9, 8); add(new THREE.CylinderGeometry(1, 1.05, 0.9, 16, 1, true), texMat('rockface', [3, 1]), 0, 0.45, 0, true, g); add(new THREE.CylinderGeometry(0.95, 0.95, 0.1, 16), waterMat(), 0, 0.5, 0, false, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.15, 2.2, 0.15), mat(0x4a3424), sx * 0.9, 1.1, 0, true, g); add(new THREE.BoxGeometry(2.2, 0.15, 0.2), mat(0x4a3424), 0, 2.2, 0, true, g); solid(-9, 8, 1.1); }
-      { const g = grp(10, 9, 0.6); add(new THREE.BoxGeometry(1.6, 0.5, 2.8), texMat('wood', [1, 1]), 0, 0.9, 0, true, g); for (const sx of [-1, 1]) { const w = add(new THREE.CylinderGeometry(0.6, 0.6, 0.12, 14), mat(0x3a2a1c), sx * 0.9, 0.6, 0.2, true, g); w.rotation.z = Math.PI / 2; } add(new THREE.BoxGeometry(0.1, 0.1, 2.2), mat(0x3a2a1c), 0.3, 0.7, 2.3, true, g); solid(10, 9, 1.6); }
-      for (const [x, z] of [[-12, -7], [-11.2, -6.2], [-12.4, -5.9]]) { add(new THREE.CylinderGeometry(0.4, 0.4, 0.9, 12), texMat('wood', [1, 1]), x, 0.45, z); }
-      solid(-11.9, -6.4, 1.1);
-      for (const [x, z, y] of [[13, -10, 0.4], [13.9, -10.2, 0.4], [13.4, -10.1, 1.2]]) add(new THREE.BoxGeometry(0.8, 0.8, 0.8), texMat('wood', [1, 1]), x, y, z);
-      solid(13.5, -10.1, 1.1);
+      { beginProp('stone'); const g = grp(-9, 8); add(new THREE.CylinderGeometry(1, 1.05, 0.9, 16, 1, true), texMat('rockface', [3, 1]), 0, 0.45, 0, true, g); add(new THREE.CylinderGeometry(0.95, 0.95, 0.1, 16), waterMat(), 0, 0.5, 0, false, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.15, 2.2, 0.15), mat(0x4a3424), sx * 0.9, 1.1, 0, true, g); add(new THREE.BoxGeometry(2.2, 0.15, 0.2), mat(0x4a3424), 0, 2.2, 0, true, g); solid(-9, 8, 1.1, true, 0.95); endProp(); }
+      { beginProp('wood'); const g = grp(10, 9, 0.6); add(new THREE.BoxGeometry(1.6, 0.5, 2.8), texMat('wood', [1, 1]), 0, 0.9, 0, true, g); for (const sx of [-1, 1]) { const w = add(new THREE.CylinderGeometry(0.6, 0.6, 0.12, 14), mat(0x3a2a1c), sx * 0.9, 0.6, 0.2, true, g); w.rotation.z = Math.PI / 2; } add(new THREE.BoxGeometry(0.1, 0.1, 2.2), mat(0x3a2a1c), 0.3, 0.7, 2.3, true, g); solidBox(10, 9.6, 1.0, 2.0, 0.6, '#6b5a48', 1.25); endProp(); }
+      for (const [x, z] of [[-12, -7], [-11.2, -6.2], [-12.4, -5.9]]) { beginProp('wood'); add(new THREE.CylinderGeometry(0.4, 0.4, 0.9, 12), texMat('wood', [1, 1]), 0, 0.45, 0, true, grp(x, z)); solid(x, z, 0.42, true, 0.95); endProp(); }
+      for (const [x, z, y] of [[13, -10, 0.4], [13.9, -10.2, 0.4], [13.4, -10.1, 1.2]]) { beginProp('wood'); add(new THREE.BoxGeometry(0.8, 0.8, 0.8), texMat('wood', [1, 1]), 0, y, 0, true, grp(x, z)); if (y < 1) solid(x, z, 0.5, true, 1.65); endProp(); }
       // rice paddies between the streets, a water mill on a pond
       for (const q of [Math.PI / 4, 3 * Math.PI / 4, 5 * Math.PI / 4, 7 * Math.PI / 4]) {
         const [cx, cz] = polar(q, 56); if (Math.hypot(cx - 50, cz + 48) < 22) continue;   // leave room for the water mill
-        for (const [ox, oz] of [[-6, -6], [6, -6], [-6, 6], [6, 6]]) { const x = cx + ox, z = cz + oz; waterRect(x, z, 10.5, 10.5); keepOut(x, z, 8); for (let i = 0; i < (hi ? 70 : 35); i++) inst('rice', x + r(-5, 5), 0, z + r(-5, 5), 0, r(0, 6), r(-0.15, 0.15), 1, r(0.8, 1.2), 1, new THREE.Color().setHSL(r(0.22, 0.27), 0.5, r(0.3, 0.4)).getHex()); }
+        for (const [ox, oz] of [[-6, -6], [6, -6], [-6, 6], [6, 6]]) { const x = cx + ox, z = cz + oz; waterRect(x, z, 10.5, 10.5); keepOut(x, z, 8); for (let i = 0; i < (hi ? 70 : 35); i++, endProp()) beginProp('plant'), inst('rice', x + r(-5, 5), 0, z + r(-5, 5), 0, r(0, 6), r(-0.15, 0.15), 1, r(0.8, 1.2), 1, new THREE.Color().setHSL(r(0.22, 0.27), 0.5, r(0.3, 0.4)).getHex()); }
       }
       flush('rice', new THREE.ConeGeometry(0.12, 0.7, 4).translate(0, 0.35, 0), mat(0xffffff, { r: 0.9 }), false);
-      { const mx = 50, mz = -48; waterDisc(mx + 7, mz, 6); house(mx, mz, -Math.PI / 2, 6, 5, 3.6, { wood: true, thatch: true }); const wh = new THREE.Group(); wh.name = 'wheel'; wh.position.set(mx + 3.2, 2.2, mz); G.add(wh); const wheel = add(new THREE.CylinderGeometry(2.2, 2.2, 0.6, 16, 1, true), mat(0x4a3424, { side: THREE.DoubleSide }), 0, 0, 0, true, wh); wheel.rotation.z = Math.PI / 2; for (let i = 0; i < 8; i++) { const sp = add(new THREE.BoxGeometry(0.1, 4.2, 0.4), mat(0x3a2a1c), 0, 0, 0, true, wh); sp.rotation.x = i / 8 * Math.PI; } keepOut(mx, mz, 12); }
+      { const mx = 50, mz = -48; waterDisc(mx + 7, mz, 6); house(mx, mz, -Math.PI / 2, 6, 5, 3.6, { wood: true, thatch: true }); beginProp('wood').live = ['wheel']; const wh = new THREE.Group(); wh.name = 'wheel'; wh.position.set(mx + 3.2, 2.2, mz); G.add(wh); const wheel = add(new THREE.CylinderGeometry(2.2, 2.2, 0.6, 16, 1, true), mat(0x4a3424, { side: THREE.DoubleSide }), 0, 0, 0, true, wh); wheel.rotation.z = Math.PI / 2; for (let i = 0; i < 8; i++) { const sp = add(new THREE.BoxGeometry(0.1, 4.2, 0.4), mat(0x3a2a1c), 0, 0, 0, true, wh); sp.rotation.x = i / 8 * Math.PI; } endProp(); keepOut(mx, mz, 12); }
       scatter(hi ? 90 : 50, W.wallR + 12, W.exploreR + 10, (x, z) => R() < 0.5 ? tree(x, z, r(0.9, 1.4), R() < 0.3 ? 0xc0582a : null) : pine(x, z, r(0.8, 1.2)), 3);
       flushTrees(); flushPines(false); flushRocks(false);
       [[-9, 10], [56, 56], [-56, 56], [-56, -56], [46, -52], [70, 12], [-14, 74], [12, -76]].forEach(([x, z]) => charm(x, z));
@@ -589,15 +599,14 @@ export function buildWorld(scene, renderer, quality) {
       floorDisc(W.wallR + 2, 'packed', 10);
       // boulders ring the plateau, opening on to the trails
       const gh = Math.asin(4.2 / (W.wallR + 2.5));
-      for (let i = 0; i < 46; i++) { const a = (i + 0.5) / 46 * TAU; if (inGap(a, gA, gh + 0.05)) continue; const [x, z] = polar(a, W.wallR + r(1.8, 3.4)); rock(x, z, r(1.6, 2.6), false, r(0.9, 1.4)); }
-      ring(W.wallR + 2.5, 2.2, gA, 4.2, '#8a8a90');
+      for (let i = 0; i < 46; i++) { const a = (i + 0.5) / 46 * TAU; if (inGap(a, gA, gh + 0.05)) continue; const [x, z] = polar(a, W.wallR + r(1.8, 3.4)); rock(x, z, r(1.6, 2.6), true, r(0.9, 1.4)); }
       for (const a of gA) { const [px, pz] = polar(a, W.wallR), [qx, qz] = polar(a, W.exploreR); path(px, pz, qx, qz, 4, 'snow', '#d8dde6'); }
       rock(-12, -6, 1.7); rock(13, -3, 1.4); rock(3, 14, 1.2); pine(-10, 12, 1, true, true); pine(12, 11, 1.1, true, true);
       lantern(-6, -15, 1.1, true);
       // the lake, a hut, a half-buried torii, and pines everywhere
       { const m = new THREE.Mesh(new THREE.CircleGeometry(18, 64), texMat('ice', [4, 4], { r: 0.15 })); m.material.metalness = 0.1; m.rotation.x = -Math.PI / 2; m.position.set(0, 0.03, 52); m.receiveShadow = true; G.add(m); keepOut(0, 52, 20); W.mm.push({ k: 'c', x: 0, z: 52, r: 18, col: '#a9c8da' }); }
       house(45, 35, -2.4, 6, 5, 3, { wood: true, thatch: true }); keepOut(45, 35, 8);
-      keepOut(-42, 40, 7); toriiAt(-42, 40, 0.8, 0.8); { const g = grp(-42, 40, 0.8); add(new THREE.CylinderGeometry(4, 4.5, 1.2, 12), texMat('snow', [2, 1]), 0, 0.1, 0, false, g); }
+      keepOut(-42, 40, 7); toriiAt(-42, 40, 0.8, 0.8); { beginProp('snow'); const g = grp(-42, 40, 0.8); add(new THREE.CylinderGeometry(4, 4.5, 0.7, 12), texMat('snow', [2, 1]), 0, 0.35, 0, false, g); endProp(); }   // the drift sits on the ground so a cut piece doesn't pop up
       keepOut(-50, -45, 8); hokora(-50, -45, 0.4);
       scatter(hi ? 260 : 150, W.wallR + 5, W.exploreR + 12, (x, z) => R() < 0.85 ? pine(x, z, r(0.9, 1.6), true, true) : rock(x, z, r(0.8, 1.8)), 1.5);
       flushPines(true); flushRocks(true); flushTrees();
@@ -615,28 +624,28 @@ export function buildWorld(scene, renderer, quality) {
       wallRing(WR, gA, 4.3, [{ h: 2.2, d: 2.4, y: 1.1, m: texMat('rockface', [1, 1]) }, { h: 1.8, d: 0.7, y: 3.1, m: texMat('plaster', [1, 1]) }, { h: 0.3, d: 1.1, y: 4.1, m: mat(0x2c2e33, { r: 0.55 }) }]);
       ring(WR, 1.3, gA, 4.3, '#7a7068');
       for (const a of gA) {
-        const [x, z] = polar(a, WR), g = grp(x, z, -a);
+        beginProp('stone'); const [x, z] = polar(a, WR), g = grp(x, z, -a);
         for (const sx of [-1, 1]) { add(new THREE.BoxGeometry(1.2, 5.6, 2.4), texMat('rockface', [1, 2]), sx * 4.9, 2.8, 0, true, g); solid(x + Math.cos(a) * 4.9 * sx, z + Math.sin(a) * 4.9 * sx, 1.1, false); }
         add(new THREE.BoxGeometry(11, 1.6, 2.6), texMat('plaster', [2, 1]), 0, 6.3, 0, true, g);
-        const rf = add(new THREE.CylinderGeometry(4, 8.6, 1.6, 4, 1, true), mat(0x2c2e33, { r: 0.55, side: THREE.DoubleSide }), 0, 7.9, 0, true, g); rf.rotation.y = Math.PI / 4; rf.scale.z = 0.4;
+        const rf = add(new THREE.CylinderGeometry(4, 8.6, 1.6, 4, 1, true), mat(0x2c2e33, { r: 0.55, side: THREE.DoubleSide }), 0, 7.9, 0, true, g); rf.rotation.y = Math.PI / 4; rf.scale.z = 0.4; endProp();
       }
       // the moat, crossed by a bridge at each gate
       { const m = new THREE.Mesh(new THREE.RingGeometry(33, 38, 120), waterMat()); m.rotation.x = -Math.PI / 2; m.position.y = 0.04; G.add(m);
         for (const rr of [32.6, 38.4]) { const b = new THREE.Mesh(new THREE.RingGeometry(rr - 0.5, rr + 0.5, 120), texMat('rockface', [40, 1])); b.rotation.x = -Math.PI / 2; b.position.y = 0.06; b.receiveShadow = true; G.add(b); }
         W.mm.push({ k: 'ring', r: 35.5, w: 2.5, gaps: gA, gh: Math.asin(2.6 / 35.5), col: '#4f7f95' });
-        W.rings.push({ r: 35.5, w: 2.9, gaps: gA, gh: Math.asin(2.6 / 35.5) });
-        for (const a of gA) { const [x, z] = polar(a, 35.5), g = grp(x, z, -a); add(new THREE.BoxGeometry(5, 0.3, 8), texMat('wood', [2, 3]), 0, 0.2, 0, true, g); for (const sx of [-1, 1]) for (const sz of [-3.6, 0, 3.6]) add(new THREE.BoxGeometry(0.18, 1.1, 0.18), red(), sx * 2.4, 0.75, sz, true, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.12, 0.12, 8), red(), sx * 2.4, 1.25, 0, true, g); }
+        W.water.push({ r0: 33, r1: 38 });   // the moat can be waded
+        for (const a of gA) { beginProp('wood'); const [x, z] = polar(a, 35.5), g = grp(x, z, -a); add(new THREE.BoxGeometry(5, 0.3, 8), texMat('wood', [2, 3]), 0, 0.2, 0, true, g); for (const sx of [-1, 1]) for (const sz of [-3.6, 0, 3.6]) add(new THREE.BoxGeometry(0.18, 1.1, 0.18), red(), sx * 2.4, 0.75, sz, true, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.12, 0.12, 8), red(), sx * 2.4, 1.25, 0, true, g); endProp(); }
       }
       for (const a of gA) { const [px, pz] = polar(a, 39), [qx, qz] = polar(a, W.exploreR); path(px, pz, qx, qz, 6, 'stone'); }
-      for (let k = 0; k < 4; k++) { const [x, z] = polar(Math.PI / 4 + k * Math.PI / 2, 12.5); add(new THREE.BoxGeometry(2.4, 0.5, 2.4), texMat('stone', [1, 1]), x, 0.25, z); pine(x, z, 0.85, false); solid(x, z, 1.3); }
+      for (let k = 0; k < 4; k++) { const [x, z] = polar(Math.PI / 4 + k * Math.PI / 2, 12.5); beginProp('stone'); add(new THREE.BoxGeometry(2.4, 0.5, 2.4), texMat('stone', [1, 1]), 0, 0.25, 0, true, grp(x, z)); solidBox(x, z, 1.2, 1.2, 0, '#6b5a48', 0.55); endProp(); pine(x, z, 0.85, false); }
       for (let k = 0; k < 4; k++) { const [x, z] = polar(k * Math.PI / 2 + 0.35, 19); lantern(x, z, 1.2, true); }
       // the keep: a sloped stone base and five white tiers under dark roofs
-      { const kx = 0, kz = -64, g = grp(kx, kz);
+      { beginProp('stone'); const kx = 0, kz = -64, g = grp(kx, kz);
         add(new THREE.CylinderGeometry(9, 12, 6, 4), texMat('rockface', [4, 2]), 0, 3, 0, true, g).rotation.y = Math.PI / 4;
         let y = 6;
         for (let i = 0; i < 5; i++) { const w = 11 - i * 1.8; add(new THREE.BoxGeometry(w, 2.6, w * 0.8), texMat('plaster', [2, 1]), 0, y + 1.3, 0, true, g); const rf = add(new THREE.CylinderGeometry(w * 0.45, w * 0.85, 1.4, 4, 1, true), mat(0x2c2e33, { r: 0.55, side: THREE.DoubleSide }), 0, y + 3.2, 0, true, g); rf.rotation.y = Math.PI / 4; rf.scale.z = 0.8; for (const sx of [-1, 1]) add(new THREE.BoxGeometry(w * 0.15, 0.6, 0.05), W.glowMat, sx * w * 0.25, y + 1.4, w * 0.4 + 0.03, false, g); y += 3.3; }
         add(new THREE.ConeGeometry(0.4, 1.2, 6), mat(0xc8a040, { r: 0.4, m: 0.6, keep: true }), 0, y + 0.8, 0, true, g);
-        solid(kx, kz, 12.5); keepOut(kx, kz, 18); }
+        solidBox(kx, kz, 8.5, 8.5, 0); keepOut(kx, kz, 18); endProp(); }
       house(52, 40, -2.2, 7, 5, 3, { wood: true }); keepOut(52, 40, 9);
       const sak = W.style === 'ink' ? 0x3a302a : 0xf1a9bd;
       scatter(hi ? 110 : 60, 42, W.exploreR + 10, (x, z) => R() < 0.45 ? tree(x, z, r(1, 1.4), R() < 0.6 ? sak : null) : pine(x, z, r(0.9, 1.4)), 3);
@@ -649,18 +658,19 @@ export function buildWorld(scene, renderer, quality) {
 
   let curTheme = 0;
   W.setMap = (id, force = false) => {
-    if (W.map === id && !force) return;
+    if (W.map === id && !force && !W.dirty) return;   // rebuilt if anything was cut down
+    W.dirty = false;
     for (const t of tiles) scene.remove(t);
     if (G) G.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); });
     for (const g of [CG, MG]) if (g) { scene.remove(g); g.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); }); }
-    for (const m of made) m.dispose(); made = []; for (const k in texCache) delete texCache[k]; stoneMat = null; matCache = {};
+    for (const m of made) m.dispose(); made = []; for (const k in texCache) delete texCache[k]; stoneMat = null; matCache = {}; cutMats.clear();
     G = new THREE.Group(); CG = new THREE.Group(); MG = new THREE.Group(); scene.add(CG, MG);
-    W.map = id; W.colliders = []; W.gates = []; W.rings = []; W.charms = []; W.dummies = []; W.mm = []; W.leapH = 3.3;
+    W.map = id; W.colliders = []; W.gates = []; W.rings = []; W.water = []; props = []; curProp = null; W.charms = []; W.dummies = []; W.mm = []; W.leapH = 3.3;
     grid = new Map(); boxes = []; clear = [];
     R = rng(MAPS.findIndex(m => m.id === id) * 7919 + 13);
     BUILD[id].call(W);
     W.arenaR = W.wallR - 1.3; W.bodyR = W.wallR - 0.7; W.tile = W.exploreR * 2;
-    mergeStatic(G);
+    mergeStatic(G); measureProps();
     tiles = []; for (let i = 0; i < 9; i++) { const t = i === 4 ? G : G.clone(); tiles.push(t); scene.add(t); }
     W.wheels = []; for (const t of tiles) { const w = t.getObjectByName('wheel'); if (w) W.wheels.push(w); }
     groundMat.map = tex(W.ground, [110, 110]); groundMat.needsUpdate = true;
@@ -674,23 +684,99 @@ export function buildWorld(scene, renderer, quality) {
     const groups = new Map(), drop = [];
     root.traverse(o => {
       if (!o.isMesh || o.isInstancedMesh) return;
-      for (let a = o.parent; a && a !== root; a = a.parent) if (a.name === 'wheel') return;
+      let pr = null;
+      for (let a = o.parent; a && a !== root; a = a.parent) { if (a.name === 'wheel') return; pr = pr || a.userData.prop || null; }
       const key = o.material.uuid + (o.castShadow ? 's' : '');
       let g = o.geometry.clone().applyMatrix4(o.matrixWorld);
       if (g.index) g = g.toNonIndexed();
       for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
       if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
       g.clearGroups(); g.morphAttributes = {};
-      if (!groups.has(key)) groups.set(key, { m: o.material, shadow: o.castShadow, list: [] });
-      groups.get(key).list.push(g); drop.push(o);
+      if (!groups.has(key)) groups.set(key, { m: o.material, shadow: o.castShadow, list: [], owners: [] });
+      groups.get(key).list.push(g); groups.get(key).owners.push(pr); drop.push(o);
     });
     for (const o of drop) { o.parent.remove(o); o.geometry.dispose(); }
-    for (const { m, shadow, list } of groups.values()) {
-      const merged = mergeGeometries(list, false); for (const g of list) g.dispose();
+    for (const { m, shadow, list, owners } of groups.values()) {
+      const merged = mergeGeometries(list, false);
+      if (merged) { let off = 0; list.forEach((g, i) => { const n = g.attributes.position.count, pr = owners[i]; if (pr) { g.computeBoundingBox(); pr.box.union(g.boundingBox); pr.ranges.push({ geo: merged, start: off, count: n, mat: m }); } off += n; }); }
+      for (const g of list) g.dispose();
       if (!merged) continue;
       const mesh = new THREE.Mesh(merged, m); mesh.castShadow = shadow; mesh.receiveShadow = true; root.add(mesh);
     }
   }
+  // bounding boxes of instanced parts, then a centre and radius per prop for quick hit tests
+  function measureProps() {
+    const ims = {}, M = new THREE.Matrix4(), bb = new THREE.Box3();
+    G.traverse(o => { if (o.isInstancedMesh) { ims[o.name] = o; if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); } });
+    for (const pr of props) {
+      for (const it of pr.inst) { const im = ims[it.name]; if (!im) continue; im.getMatrixAt(it.i, M); pr.box.union(bb.copy(im.geometry.boundingBox).applyMatrix4(M)); }
+      for (const name of pr.live || []) { const o = G.getObjectByName(name); if (o) pr.box.union(bb.setFromObject(o)); }
+      if (pr.box.isEmpty()) { pr.cut = true; continue; }
+      pr.cx = (pr.box.min.x + pr.box.max.x) / 2; pr.cz = (pr.box.min.z + pr.box.max.z) / 2; pr.rad = Math.hypot(pr.box.max.x - pr.box.min.x, pr.box.max.z - pr.box.min.z) / 2;
+    }
+  }
+  // props whose nearest copy is within R of pos: [{ prop, ox, oz, box (world) }]
+  W.propsNear = (pos, R) => {
+    if (!W.explore) return [];
+    const P = W.tile, tx = Math.round(pos.x / P) * P, tz = Math.round(pos.z / P) * P, lx = pos.x - tx, lz = pos.z - tz, out = [];
+    for (const pr of props) {
+      if (pr.cut) continue;
+      let dx = pr.cx - lx, dz = pr.cz - lz; const kx = Math.round(dx / P), kz = Math.round(dz / P); dx -= kx * P; dz -= kz * P;
+      if (Math.hypot(dx, dz) - pr.rad > R) continue;
+      const ox = tx + kx * P, oz = tz + kz * P;
+      out.push({ prop: pr, ox, oz, box: pr.box.clone().translate(new THREE.Vector3(ox, 0, oz)) });
+    }
+    return out;
+  };
+  // Lift a prop out of the scenery as world-space, sliceable pieces [{ geo, mat, cap }] placed at (ox, oz), and
+  // remove it (and its colliders) from every copy of the tile
+  const ZERO = new THREE.Matrix4().makeScale(0, 0, 0), _M = new THREE.Matrix4(), _ic = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
+  // a cut piece keeps the prop's own material (texture, roughness, double-sided roofs), switched to vertex colours
+  // so per-instance tints survive and the slicer can colour the cut faces
+  const cutMats = new Map();
+  const cutMat = m => { let c = cutMats.get(m); if (!c) { c = keepMat(m.clone()); c.vertexColors = true; cutMats.set(m, c); } return c; };
+  function sliceItem(g, tint, m, cap) {   // keep position, normal and uv; the tint (and any vertex colours) go into vertex colours
+    if (g.index) g = g.toNonIndexed();
+    const glow = m.isMeshBasicMaterial, base = glow ? m.color.clone().multiply(tint) : tint;
+    const vc = g.attributes.color, n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { const k = vc ? vc.getX(i) : 1, k2 = vc ? vc.getY(i) : 1, k3 = vc ? vc.getZ(i) : 1; col[i * 3] = base.r * k; col[i * 3 + 1] = base.g * k2; col[i * 3 + 2] = base.b * k3; }
+    for (const a of Object.keys(g.attributes)) if (a !== 'position' && a !== 'normal' && (a !== 'uv' || glow)) g.deleteAttribute(a);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return { geo: g, mat: glow ? MATS.glow : cutMat(m), cap };
+  }
+  W.cutProp = (pr, ox, oz) => {
+    if (pr.cut) return null;
+    pr.cut = true; W.dirty = true;
+    const items = [], T = new THREE.Matrix4().makeTranslation(ox, 0, oz);
+    for (const it of pr.inst) {
+      const ims = tiles.map(t => t.getObjectByName(it.name)).filter(Boolean); if (!ims.length) continue;
+      const im = ims[0]; im.getMatrixAt(it.i, _M);
+      items.push(sliceItem(im.geometry.clone().applyMatrix4(_M.clone().premultiply(T)), im.instanceColor ? (im.getColorAt(it.i, _ic), _ic.clone()) : WHITE, im.material, pr.cap));
+      for (const m of ims) { m.setMatrixAt(it.i, ZERO); m.instanceMatrix.needsUpdate = true; }
+    }
+    for (const rg of pr.ranges) {
+      const Pa = rg.geo.attributes.position, Na = rg.geo.attributes.normal, Ua = rg.geo.attributes.uv, a = rg.start * 3, b = (rg.start + rg.count) * 3, g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(Pa.array.slice(a, b), 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(Na.array.slice(a, b), 3));
+      if (Ua) g.setAttribute('uv', new THREE.Float32BufferAttribute(Ua.array.slice(rg.start * 2, (rg.start + rg.count) * 2), 2));
+      g.applyMatrix4(T);
+      items.push(sliceItem(g, WHITE, rg.mat, pr.cap));
+      Pa.array.fill(0, a, b); Pa.needsUpdate = true;   // every tile copy shares this geometry
+    }
+    for (const name of pr.live || []) {   // moving parts (the water wheel) aren't merged: copy their meshes as they stand now
+      const o = G.getObjectByName(name); if (!o) continue;
+      o.updateMatrixWorld(true); const inv = G.matrixWorld.clone().invert();
+      o.traverse(m => { if (m.isMesh) items.push(sliceItem(m.geometry.clone().applyMatrix4(inv.clone().multiply(m.matrixWorld).premultiply(T)), WHITE, m.material, pr.cap)); });
+      for (const t of tiles) { const x = t.getObjectByName(name); if (x) x.visible = false; }
+    }
+    for (const c of pr.col) c.dead = true;
+    return items;
+  };
+  // wading: inside a pond, paddy or the moat (tile-local test)
+  W.inWater = pos => {
+    const q = W.local(pos);
+    return W.water.some(w => w.r0 !== undefined ? (d => d > w.r0 && d < w.r1)(Math.hypot(q.x, q.z)) : w.r !== undefined ? Math.hypot(q.x - w.x, q.z - w.z) < w.r : Math.abs(q.x - w.x) < w.hw && Math.abs(q.z - w.z) < w.hd);
+  };
   W.setStyle = s => { W.style = s; skyU.ink.value = s === 'ink' ? 1 : 0; if (W.map) W.setMap(W.map, true); };
   // explore mode opens the whole map (charms show; the arena edge no longer holds you in)
   W.setExplore = on => {
@@ -700,23 +786,24 @@ export function buildWorld(scene, renderer, quality) {
   };
 
   // push a circle (x, z, rad) out of everything solid; returns nothing, edits p in place
-  W.collide = (p, rad) => {
-    if (!W.explore) return collideLocal(p, rad);
+  W.collide = (p, rad, y = 0) => {
+    if (!W.explore) return collideLocal(p, rad, y);
     const P = W.tile, cx = Math.round(p.x / P) * P, cz = Math.round(p.z / P) * P, q = { x: p.x - cx, z: p.z - cz }, E = P / 2 - 4;
-    collideLocal(q, rad);
+    collideLocal(q, rad, y);
     const ox = q.x > E ? -P : q.x < -E ? P : 0, oz = q.z > E ? -P : q.z < -E ? P : 0;   // props just across the tile edge
-    for (const [dx, dz] of [[ox, 0], [0, oz], [ox, oz]]) if (dx || dz) { q.x += dx; q.z += dz; collideLocal(q, rad, false); q.x -= dx; q.z -= dz; }
+    for (const [dx, dz] of [[ox, 0], [0, oz], [ox, oz]]) if (dx || dz) { q.x += dx; q.z += dz; collideLocal(q, rad, y); q.x -= dx; q.z -= dz; }
     p.x = q.x + cx; p.z = q.z + cz;
   };
   // position in the tile under p (the map repeats every W.tile metres)
   W.local = p => { const P = W.tile; return { x: p.x - Math.round(p.x / P) * P, z: p.z - Math.round(p.z / P) * P }; };
-  function collideLocal(p, rad, rings = true) {
+  function collideLocal(p, rad, y = 0) {
     const i0 = Math.floor((p.x - rad) / CELL), i1 = Math.floor((p.x + rad) / CELL), j0 = Math.floor((p.z - rad) / CELL), j1 = Math.floor((p.z + rad) / CELL);
     const seen = new Set();
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
       const L = grid.get(cellKey(i, j)); if (!L) continue;
       for (const o of L) {
         if (seen.has(o)) continue; seen.add(o);
+        if (o.dead || y > o.h) continue;   // cut down, or jumped over
         if (o.box) {
           const dx = p.x - o.x, dz = p.z - o.z, lx = dx * o.c - dz * o.s, lz = dx * o.s + dz * o.c;
           const cx = Math.max(-o.hw, Math.min(o.hw, lx)), cz = Math.max(-o.hd, Math.min(o.hd, lz));
@@ -730,15 +817,7 @@ export function buildWorld(scene, renderer, quality) {
         }
       }
     }
-    if (W.explore) {
-      if (!rings) return;
-      const pr = Math.hypot(p.x, p.z), a = Math.atan2(p.x, -p.z);
-      for (const g of W.rings) {
-        const off = pr - g.r, lim = g.w + rad;
-        if (Math.abs(off) >= lim || inGap(a, g.gaps, g.gh)) continue;
-        const to = off >= 0 ? g.r + lim : g.r - lim; p.x *= to / pr; p.z *= to / pr;
-      }
-    } else { const pr = Math.hypot(p.x, p.z), M = W.arenaR - rad; if (pr > M) { p.x *= M / pr; p.z *= M / pr; } }
+    if (!W.explore) { const pr = Math.hypot(p.x, p.z), M = W.arenaR - rad; if (pr > M) { p.x *= M / pr; p.z *= M / pr; } }   // the arena edge only holds during a fight
   }
   const lxPush = (p, o, lx, lz) => { p.x += lx * o.c + lz * o.s; p.z += -lx * o.s + lz * o.c; };
 

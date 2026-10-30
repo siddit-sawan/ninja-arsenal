@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { sdk, initSDK, loadingStart, loadingStop, happytime, gameplay, loadData, saveData, clearData, adsOK, runAd } from './sdk.js';
 import { audio, sfx, music } from './audio.js';
-import { CAP, batchParts } from './slicer.js';
+import { CAP, batchParts, chunkFrom } from './slicer.js';
 import { loadBody, cloneChar, RIG, cutMarks, MARK_MAT } from './body.js';
 import { makePhysics } from './ragdoll.js';
 import { buildEnemy, buildPlayer, setModelStyle, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, sickle } from './models.js';
@@ -50,7 +50,7 @@ const persist = () => saveData(SAVE_KEY, JSON.stringify(save));
 const WEAP = {
   katana: { name: 'Katana', mode: 'swipe', cost: 0, color: '#cfefff', flash: 0xcfefff,
     desc: 'Swipe to slice anything within reach. Cut falling halves again in mid-air for bonus coins.',
-    range: l => 7.5 + l * 0.9, dmg: l => 1 + Math.floor((l - 1) / 2), cd: () => 0, up: [200, 450, 900, 1600] },
+    range: l => 7.5 + l * 0.9, dmg: l => 1 + Math.floor((l - 1) / 2), cd: () => 0.3, up: [200, 450, 900, 1600] },
   shuriken: { name: 'Shuriken', mode: 'throw', cost: 300, color: '#ffe08a', flash: 0xffe08a,
     desc: 'Tap or hold to throw spinning stars. They pierce through enemies and cut them across the middle.',
     range: () => 60, dmg: l => l >= 4 ? 2 : 1, cd: l => 0.38 - l * 0.035, pierce: l => 1 + Math.floor(l / 2), count: l => l >= 5 ? 3 : l >= 3 ? 2 : 1, up: [300, 600, 1100, 1900] },
@@ -564,6 +564,11 @@ function updPProj(dt) {
       const res = cutBody(b, new THREE.Plane().setFromNormalAndCoplanarPoint(n, pr.p), vd, -4);
       pr.hitB = pr.hitB || new Set(); pr.hitB.add(b); if (res) res.forEach(x => pr.hitB.add(x));
     }
+    for (const h of propsAt(pr.p)) {
+      const vd = pr.v.clone().normalize();
+      const n = pr.id === 'shuriken' ? UP.clone().applyAxisAngle(vd, rnd(-0.45, 0.45)) : new V3().crossVectors(vd, UP).normalize();
+      pr.hitB = pr.hitB || new Set(); for (const x of cutProp(h, new THREE.Plane().setFromNormalAndCoplanarPoint(n, pr.p), vd, -4)) pr.hitB.add(x);
+    }
     if (pr.p.y < 0.03) { pr.stuck = true; pr.life = 2; pr.p.y = 0.03; fx.sparks(pr.p, 5, 0xffe0a0, 3); }
     else if (pr.life <= 0) removePProj(pr);
   }
@@ -594,7 +599,7 @@ function doFling(x0, y0, x1, y1) {
     });
   }
   hitProjectiles(ext);
-  after(0.22, () => sliceBodies(ext, sp, W.range(l), stroke));
+  after(0.22, () => { sliceBodies(ext, sp, W.range(l), stroke); if (stage && stage.explore) sliceProps(ext, sp, W.range(l), stroke); });
   fling.on = true; fling.t = 0; fling.a.copy(rayDir(x0, y0)); fling.b.copy(rayDir(x1, y1)); fling.dist = Math.min(W.range(l) + Math.hypot(camera.position.x - player.pos.x, camera.position.z - player.pos.z), far + 1);
   fling.mesh.visible = fling.chain.visible = true;
   sfx.swish(0.7); jab = 0.18;
@@ -679,9 +684,42 @@ function sliceSeg(seg, x0, y0, x1, y1, range, dmg, sid, weapon, bodies = true) {
   }
   hitProjectiles(seg);
   if (bodies) sliceBodies(seg, sp, range, sid);
+  if (stage && stage.explore) sliceProps(seg, sp, range, sid);
   return kills;
 }
 // corpses and severed pieces can always be cut again
+// Explore: the blade cuts the scenery itself. A prop the stroke crosses is lifted out of the world as a loose body
+// and split along the cut; trees, stalks, lanterns and wall segments come down, houses fall apart.
+function sliceProps(seg, sp, range, sid) {
+  for (const h of world.propsNear(player.pos, range + 1.5)) {
+    const r = boxRect(h.box); if (r && segRect(seg, r)) cutProp(h, sp.plane, sp.push, sid);
+  }
+}
+// thrown weapons cut whatever scenery they fly into
+const propsAt = p => stage && stage.explore ? world.propsNear(p, 0.5).filter(h => h.box.containsPoint(p)) : [];
+// returns the loose bodies the prop became
+function cutProp(h, plane, push, sid) {
+  const items = world.cutProp(h.prop, h.ox, h.oz); if (!items || !items.length) return [];
+  const big = h.box.getSize(new V3()).length(), b = phys.addRigid(chunkFrom(items), new V3(), new V3(), sid);
+  const at = nearestOnPlane(h.box.getCenter(new V3()), plane), k = Math.min(1, 2 / big);
+  const res = phys.cut(b, plane, push, sid);
+  if (!res) { b.v.copy(push).multiplyScalar(2 * k).add(new V3(0, k, 0)); b.w.set(push.z, 0, -push.x).multiplyScalar(2.5 * k); }   // missed the middle: knocked over
+  else for (const p of res) settleCut(p, plane, push);
+  const stone = h.prop.cap === 'stone';
+  if (stone) { sfx.clang(); fx.sparks(at, 18); } else sfx.slice(0.7);
+  fx.flash(at, plane.normal, push, Math.min(6, big * 0.6), 0x120e0b); fx.dust(new V3(at.x, 0, at.z), 8, Math.min(2, 0.4 + big * 0.12));
+  shake = Math.max(shake, Math.min(0.6, big * 0.04)); score += 5;
+  return res || [b];
+}
+// big pieces don't fly: what still stands on the ground stays as a stump (or leans away from a vertical cut),
+// what was above the cut topples over in the stroke's direction; small pieces keep the slicer's scatter
+function settleCut(p, plane, push) {
+  const bx = phys.bounds(p).clone(), size = bx.getSize(new V3()).length(); if (size < 1.5) return;
+  const n = plane.normal.clone().multiplyScalar(Math.sign(plane.distanceToPoint(bx.getCenter(new V3()))) || 1), tip = Math.min(1, 1.5 / size);
+  const fwd = push.clone().setY(0); if (fwd.lengthSq() < 1e-4) fwd.set(n.x, 0, n.z); fwd.normalize();
+  if (bx.min.y < 0.15) { p.v.set(n.x, 0, n.z).multiplyScalar(0.4); p.w.crossVectors(UP, n).multiplyScalar(tip); }
+  else { p.v.copy(fwd).multiplyScalar(1.2).addScaledVector(n, 0.4); p.v.y = Math.min(p.v.y, 0.3); p.w.crossVectors(UP, fwd).multiplyScalar(1.5 * tip); }
+}
 function sliceBodies(seg, sp, range, sid) {
   for (const b of phys.all()) {
     if (b.stroke === sid || b.sink) continue;
@@ -1113,6 +1151,31 @@ function stormDraw() {
     else stormMark(e, plane, sid, holdAt - i * 0.03);
   }));
   for (const pr of eProj.slice()) deflect(pr);
+  if (stage.explore) stormScenery(sid, holdAt);
+}
+// Explore: the Storm takes the surroundings with it. Every prop in reach is marked when the blade flashes out
+// and comes apart at the click of the sheath (nearest first), along a slanting cut low enough to fell trees and
+// take the top off a house; loose pieces already lying around are cut again.
+const STORM_PROPS_R = 16, STORM_PROPS_MAX = 30;
+function stormScenery(sid, hold) {
+  const ctr = h => h.box.getCenter(new V3()), dd = h => { const c = ctr(h); return Math.hypot(c.x - player.pos.x, c.z - player.pos.z); };
+  const list = world.propsNear(player.pos, STORM_PROPS_R).sort((a, b) => dd(a) - dd(b)).slice(0, STORM_PROPS_MAX);
+  list.forEach((h, i) => {
+    const c = ctr(h); c.y = Math.min(c.y, 2.2);
+    const out = new V3(c.x - player.pos.x, 0, c.z - player.pos.z); if (out.lengthSq() < 1e-4) out.set(0, 0, -1); out.normalize();
+    const side = new V3().crossVectors(UP, out), n = UP.clone().addScaledVector(side, rnd(-0.7, 0.7)).addScaledVector(out, rnd(-0.3, 0.3)).normalize();
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, c);
+    after(i * 0.02, () => { fx.flash(c, n, side, Math.min(5, h.box.getSize(new V3()).length() * 0.5)); const s = toScreen(c); if (s) stormLines.push({ x: s.x, y: s.y, a: rnd(0, Math.PI), t: 0.35 }); });
+    after(hold + i * 0.03, () => { if (stage.explore) cutProp(h, plane, out, sid); });
+  });
+  after(hold, () => {
+    for (const b of phys.all()) {
+      if (b.sink || b.stroke === sid) continue;
+      const c = phys.center(b); if (Math.hypot(c.x - player.pos.x, c.z - player.pos.z) > STORM_PROPS_R) continue;
+      const out = new V3(c.x - player.pos.x, 0, c.z - player.pos.z).normalize();
+      cutBody(b, new THREE.Plane().setFromNormalAndCoplanarPoint(new V3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).normalize(), c), out, sid);
+    }
+  });
 }
 function stormSheathe() { sfx.clang(); shake = Math.max(shake, 0.5); hitStop = Math.max(hitStop, 0.08); }   // the click of the guard: they fall
 
@@ -1298,12 +1361,17 @@ function beginStroke(x, y) {
   stroke++; trail.length = 0; trail.push({ x, y, t: performance.now() });
   const W = WEAP[cur];
   if (W.mode === 'throw' && cds[cur] <= 0) { fireThrow(cur, x, y); cds[cur] = W.cd(lvl(cur)); }
+  ptr.live = cds[cur] <= 0; ptr.cutT = 0;   // swipe: a stroke started while the blade recovers doesn't cut
 }
+// a swipe is one swing: it cuts for up to SWING_T, then the blade needs its cooldown before the next swing
+const SWING_T = 500;
+function endSwing() { if (ptr.cutT) { cds[cur] = WEAP[cur].cd(lvl(cur)); ptr.cutT = 0; } ptr.live = false; }
 function endStroke() {
   if (!ptr.down) return;
   ptr.down = false;
   if (state !== 'play') return;
   const W = WEAP[cur], L = Math.hypot(ptr.x - ptr.sx, ptr.y - ptr.sy);
+  if (W.mode === 'swipe' && ptr.cutT) { endSwing(); return; }
   if (W.mode === 'fling') { if (cds[cur] <= 0) { if (L > 45) doFling(ptr.sx, ptr.sy, ptr.x, ptr.y); else quickSlash(); } }
   else if ((W.mode === 'swipe' || W.mode === 'sweep') && L < 22) quickSlash();
 }
@@ -1316,7 +1384,7 @@ function quickSlash() {
   const a = quickFlip ? -0.65 : Math.PI + 0.65, r = Math.min(vw, vh) * 0.26;
   const x0 = cx - Math.cos(a) * r, y0 = cy + Math.sin(a) * r, x1 = cx + Math.cos(a) * r, y1 = cy - Math.sin(a) * r;
   if (W.mode === 'fling') { doFling(x0, y0, x1, y1); return; }
-  if (W.mode === 'sweep') { if (cds[cur] > 0) return; cds[cur] = W.cd(l); }
+  if (W.mode === 'sweep' || W.mode === 'swipe') { if (cds[cur] > 0) return; cds[cur] = W.cd(l); }
   stroke++;
   const now = performance.now(); trail.length = 0;
   for (let i = 0; i <= 8; i++) trail.push({ x: x0 + (x1 - x0) * i / 8, y: y0 + (y1 - y0) * i / 8, t: now - (8 - i) * 8 });
@@ -1367,6 +1435,9 @@ function moveTo(x, y) {
   const dx = x - ptr.lx, dy = y - ptr.ly, L = Math.hypot(dx, dy);
   if (W.mode === 'swipe') {
     if (L < 9) return;
+    if (!ptr.live && cds[cur] <= 0) ptr.live = true;   // still dragging when the blade is ready again: the next swing starts
+    if (!ptr.live) { ptr.lx = x; ptr.ly = y; return; }
+    if (!ptr.cutT) ptr.cutT = now; else if (now - ptr.cutT > SWING_T) { endSwing(); return; }
     const l = lvl(cur);
     if (now - ptr.lastSwing > 200 && L > 14) { startSwing(dx, dy); sfx.swish(1); ptr.lastSwing = now; }
     sliceSeg([ptr.lx, ptr.ly, x, y], ptr.lx, ptr.ly, x, y, W.range(l), W.dmg(l), stroke, cur);
@@ -1458,13 +1529,15 @@ function updPlayer(dt) {
   const wx = fx * cy + fz * sy, wz = -fx * sy + fz * cy;
   player.moveDir.set(wx, 0, wz);
   const k = Math.min(1, dt * 12);
-  const spd = SPEED * CH().speed;
+  player.wade = stage && stage.explore && player.y < 0.15 && world.inWater(player.pos);   // wading through ponds, paddies, the moat
+  const spd = SPEED * CH().speed * (player.wade ? 0.55 : 1);
+  if (player.wade && Math.hypot(player.vel.x, player.vel.z) > 1 && Math.random() < dt * 10) fx.sparks(new V3(player.pos.x, 0.25, player.pos.z), 3, 0xd8ecff, 1.6);
   player.vel.x += (wx * spd - player.vel.x) * k; player.vel.z += (wz * spd - player.vel.z) * k;
   const p = player.pos;
   p.x += player.vel.x * dt; p.z += player.vel.z * dt;
   if (player.dashT > 0) { player.dashT -= dt; p.addScaledVector(player.dashDir, 21 * dt); }
   if (player.dashCD > 0) { player.dashCD -= dt; if (player.dashCD <= 0) $('dashBtn').classList.remove('cd'); }
-  world.collide(p, PLAYER_R);   // props, walls (open only at the gates) and the edge of the arena or map
+  world.collide(p, PLAYER_R, player.y);   // props and walls (low ones can be jumped); in a fight, the arena edge
   const sp = Math.hypot(player.vel.x, player.vel.z);
   if (!player.ground) {
     player.vy -= 22 * dt; player.y += player.vy * dt;
@@ -1760,7 +1833,7 @@ function animHero(dt) {
   hero.visible = show;
   if (!show) return;
   const P = heroP, k = 1 - Math.exp(-dt * 14), sp = preview ? 0 : clamp(Math.hypot(player.vel.x, player.vel.z) / SPEED, 0, 1);
-  hero.position.set(player.pos.x, player.y, player.pos.z);
+  hero.position.set(player.pos.x, player.y - (player.wade ? 0.38 : 0), player.pos.z);   // knee-deep when wading
   hero.rotation.y = player.yaw + Math.PI;
   if (preview) { hero.position.set(0, 0, 0); hero.rotation.y = 0.35 + Math.sin(T * 0.5) * 0.6; }
   player.ph += dt * sp * 11;
@@ -2459,6 +2532,8 @@ async function boot() {
     if (QS.has('go')) after(1.4, tryFinish);
   }
   if (test === 'explore') { startExplore(QS.get('map') || 'shrine'); if (QS.get('at')) { const [x, z] = QS.get('at').split(',').map(Number); player.pos.set(x, 0, z); } }   // dev: ?test=explore&map=castle&at=x,z
+  if (test === 'explore' && QS.get('slash')) for (let k = 0; k < +QS.get('slash'); k++) after(1 + k * 0.5, () => { const f = k % 2 ? -1 : 1, x0 = vw * 0.5 - vw * 0.2 * f, y0 = vh * 0.3, x1 = vw * 0.5 + vw * 0.2 * f, y1 = vh * 0.7; stroke++; sliceSeg([x0, y0, x1, y1], x0, y0, x1, y1, +(QS.get('range') || 6), 1, stroke, 'katana'); });   // dev: &slash=N cuts through the screen centre
+  if (DEV && QS.get('yaw')) after(0.1, () => { player.yaw = +QS.get('yaw'); });
   if (test === 'explore' && (QS.has('talk') || QS.has('duel'))) after(0.5, () => { const e = makeNPC(player.pos.x, player.pos.z - 2.6); QS.has('talk') ? talk(e) : challenge(e); });   // dev: &talk / &duel
   if (test === 'tutorial') { startTutorial(); if (QS.get('tstep')) { tut.i = +QS.get('tstep') - 2; nextTutStep(); } }
   if (test === 'tour') { $('arsenalBtn').click(); startTour(false); for (let i = 0; i < +(QS.get('tour') || 0); i++) nextTour(); }

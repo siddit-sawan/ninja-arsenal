@@ -1,4 +1,5 @@
-// Real-time mesh slicing: cuts non-indexed (position, normal, color) geometry by a plane and caps the hole.
+// Real-time mesh slicing: cuts non-indexed (position, normal, color[, uv]) geometry by a plane and caps the hole.
+// Textured geometry (with uv) keeps its texture; its caps become separate untextured meshes.
 import * as THREE from 'three';
 
 export const MATS = {
@@ -15,6 +16,9 @@ const capColors = {
   limb: () => CAP.blood ? { rim: C(0xc0161f), inner: C(0xefe6d2), k: 0.3 } : { rim: C(0x2a2040), inner: C(0xd8d0e8), k: 0.3 },
   metal: () => ({ rim: C(0xc9d2da), inner: C(0xa8b2bc), k: 0.5 }),
   wood: () => ({ rim: C(0xd9b07a), inner: C(0xb98e58), k: 0.55 }),
+  stone: () => ({ rim: C(0x8f8a82), inner: C(0xb9b3a8), k: 0.55 }),   // cut scenery: rock, lanterns, walls
+  plant: () => ({ rim: C(0x7d9a46), inner: C(0xd6e2a4), k: 0.5 }),   // bamboo, rice
+  snow: () => ({ rim: C(0xdfe7ef), inner: C(0xf6f9fc), k: 0.5 }),   // snow drifts
   bone: () => ({ rim: C(0xf2ead8), inner: C(0xe0d4bc), k: 0.5 }),
   glow: () => ({ rim: C(0xffffff), inner: C(0xffffff), k: 0.5 }),
 };
@@ -66,12 +70,12 @@ export function part(geo, color, mat = 'body', capKind = 'flesh') {
 }
 
 // --- clipping ---------------------------------------------------------------
-function vert(P, N, C, i) {
-  const a = i * 3;
-  return [P[a], P[a + 1], P[a + 2], N[a], N[a + 1], N[a + 2], C[a], C[a + 1], C[a + 2]];
+function vert(P, N, C, U, i) {
+  const a = i * 3, u = i * 2;
+  return [P[a], P[a + 1], P[a + 2], N[a], N[a + 1], N[a + 2], C[a], C[a + 1], C[a + 2], U ? U[u] : 0, U ? U[u + 1] : 0];
 }
-function lerpV(a, b, s) { const r = new Array(9); for (let i = 0; i < 9; i++) r[i] = a[i] + (b[i] - a[i]) * s; return r; }
-function pushV(out, v) { out.p.push(v[0], v[1], v[2]); out.n.push(v[3], v[4], v[5]); out.c.push(v[6], v[7], v[8]); }
+function lerpV(a, b, s) { const r = new Array(11); for (let i = 0; i < 11; i++) r[i] = a[i] + (b[i] - a[i]) * s; return r; }
+function pushV(out, v) { out.p.push(v[0], v[1], v[2]); out.n.push(v[3], v[4], v[5]); out.c.push(v[6], v[7], v[8]); out.u.push(v[9], v[10]); }
 function fan(out, poly) { for (let i = 1; i + 1 < poly.length; i++) { pushV(out, poly[0]); pushV(out, poly[i]); pushV(out, poly[i + 1]); } }
 
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _t = new THREE.Vector3();
@@ -97,7 +101,7 @@ function addCap(out, pts, n, col, facing) {
   if (ring.length > 2) { const f = ring[0], l = ring[ring.length - 1]; if (Math.abs(f[0] - l[0]) + Math.abs(f[1] - l[1]) + Math.abs(f[2] - l[2]) < 1e-4) ring.pop(); }
   if (ring.length < 3) return;
   const nx = n.x * facing, ny = n.y * facing, nz = n.z * facing, k = col.k, R = col.rim, I = col.inner;
-  const V = (p, c, m = 1) => [p[0], p[1], p[2], nx, ny, nz, c.r * m, c.g * m, c.b * m];
+  const V = (p, c, m = 1) => [p[0], p[1], p[2], nx, ny, nz, c.r * m, c.g * m, c.b * m, 0, 0];
   const inner = p => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k, cz + (p[2] - cz) * k];
   const centre = V([cx, cy, cz], I, 0.85);
   const tri = (a, b, c) => { if (facing > 0) { pushV(out, a); pushV(out, b); pushV(out, c); } else { pushV(out, a); pushV(out, c); pushV(out, b); } };
@@ -107,19 +111,22 @@ function addCap(out, pts, n, col, facing) {
     tri(V(q0, R, 0.62), V(p0, R), V(p1, R)); tri(V(q0, R, 0.62), V(p1, R), V(q1, R, 0.62));   // rim, darker toward the middle
   }
 }
-function toGeo(o) {
+function toGeo(o, uv) {
   if (o.p.length < 9) return null;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(o.p, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(o.n, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(o.c, 3));
+  if (uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(o.u, 2));
   return g;
 }
 
 // Returns {front, back} geometries (null when that side is empty). front = side the plane normal points to.
+// Textured geometry also returns the caps on their own: {frontCap, backCap}.
 export function clipGeo(geo, plane, capCol) {
-  const P = geo.attributes.position.array, N = geo.attributes.normal.array, C = geo.attributes.color.array;
-  const F = { p: [], n: [], c: [] }, B = { p: [], n: [], c: [] }, cap = [];
+  const P = geo.attributes.position.array, N = geo.attributes.normal.array, C = geo.attributes.color.array, U = geo.attributes.uv ? geo.attributes.uv.array : null;
+  const out = () => ({ p: [], n: [], c: [], u: [] });
+  const F = out(), B = out(), FC = U ? out() : F, BC = U ? out() : B, cap = [];
   const nx = plane.normal.x, ny = plane.normal.y, nz = plane.normal.z, pc = plane.constant;
   const d = [0, 0, 0], vs = [null, null, null];
   const cnt = P.length / 3;
@@ -130,7 +137,7 @@ export function clipGeo(geo, plane, capCol) {
       let dd = P[i] * nx + P[i + 1] * ny + P[i + 2] * nz + pc;
       if (Math.abs(dd) < 1e-6) dd = 0;
       d[k] = dd; if (dd > 0) pos++; else if (dd < 0) neg++;
-      vs[k] = vert(P, N, C, t + k);
+      vs[k] = vert(P, N, C, U, t + k);
     }
     if (neg === 0) { pushV(F, vs[0]); pushV(F, vs[1]); pushV(F, vs[2]); for (let k = 0; k < 3; k++) if (d[k] === 0) cap.push(vs[k]); continue; }
     if (pos === 0) { pushV(B, vs[0]); pushV(B, vs[1]); pushV(B, vs[2]); for (let k = 0; k < 3; k++) if (d[k] === 0) cap.push(vs[k]); continue; }
@@ -148,10 +155,11 @@ export function clipGeo(geo, plane, capCol) {
     fan(F, fp); fan(B, bp);
   }
   if (F.p.length && B.p.length) {
-    addCap(F, cap, plane.normal, capCol, -1);
-    addCap(B, cap, plane.normal, capCol, 1);
+    addCap(FC, cap, plane.normal, capCol, -1);
+    addCap(BC, cap, plane.normal, capCol, 1);
   }
-  return { front: toGeo(F), back: toGeo(B) };
+  if (!U) return { front: toGeo(F), back: toGeo(B) };
+  return { front: toGeo(F, true), back: toGeo(B, true), frontCap: toGeo(FC), backCap: toGeo(BC) };
 }
 
 // --- chunks -----------------------------------------------------------------
@@ -203,13 +211,16 @@ export function sliceChunk(chunk, worldPlane) {
     const r = clipGeo(m.geometry, lp, capColor(m.userData.capKind));
     if (r.front) fr.push({ geo: r.front, mat: m.material, cap: m.userData.capKind });
     if (r.back) bk.push({ geo: r.back, mat: m.material, cap: m.userData.capKind });
+    if (r.frontCap) fr.push({ geo: r.frontCap, mat: MATS.body, cap: m.userData.capKind });   // textured: the cut face is its own plain mesh
+    if (r.backCap) bk.push({ geo: r.backCap, mat: MATS.body, cap: m.userData.capKind });
   }
   if (!fr.length || !bk.length) { for (const it of fr.concat(bk)) it.geo.dispose(); return null; }
   // drop slivers: a side that is almost empty counts as a miss
-  const vol = items => { _box.makeEmpty(); for (const it of items) { it.geo.computeBoundingBox(); _box.union(it.geo.boundingBox); } const s = _box.getSize(_ctr); return s.x * s.y * s.z + 1e-9; };
+  // (by volume, unless the piece is still long - a thin stalk cut low leaves a narrow but tall stump)
+  const sliver = items => { _box.makeEmpty(); for (const it of items) { it.geo.computeBoundingBox(); _box.union(it.geo.boundingBox); } const s = _box.getSize(_ctr); return s.x * s.y * s.z + 1e-9 < wv * 0.004 && s.length() < whole.length() * 0.1; };
   const whole = chunk.userData.box.getSize(new THREE.Vector3());
   const wv = whole.x * whole.y * whole.z + 1e-9;
-  if (vol(fr) < wv * 0.004 || vol(bk) < wv * 0.004) { for (const it of fr.concat(bk)) it.geo.dispose(); return null; }
+  if (sliver(fr) || sliver(bk)) { for (const it of fr.concat(bk)) it.geo.dispose(); return null; }
   return [makeChunk(fr, chunk.matrixWorld), makeChunk(bk, chunk.matrixWorld)];
 }
 

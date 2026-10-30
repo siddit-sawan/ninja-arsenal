@@ -9,6 +9,9 @@ const G = 19, H = 1 / 120, ITERS = 8;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const _a = new V3(), _b = new V3(), _c = new V3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _inv = new THREE.Matrix4(), _s = new V3(1, 1, 1);
 const UP = new V3(0, 1, 0);
+// the 26 directions of a box, its edges and its corners: +x -x +y -y +z -z first (shapesOf relies on that order)
+const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map(a => new V3(...a));
+for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) if ((x !== 0) + (y !== 0) + (z !== 0) >= 2) DIRS.push(new V3(x, y, z).normalize());
 
 class Pt {
   constructor(p, r, w) { this.p = p.clone(); this.o = p.clone(); this.r = r; this.w = w; }
@@ -282,12 +285,14 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     }
     const size = group.userData.box.getSize(new V3());
     const R = Math.max(0.05, size.length() * 0.38);
-    const b = { isDoll: false, group, v: vel, w: ang, sup, I: 0.4 * R * R, asleep: false, still: 0, age: 0, stroke: sid, cuts: 0, sink: 0, landed: false };
+    const sh = shapesOf(group);
+    const b = { isDoll: false, group, v: vel, w: ang, sup, I: 0.4 * R * R, asleep: false, still: 0, age: 0, stroke: sid, cuts: 0, sink: 0, landed: false,
+      shapes: sh.shapes, pts: sh.pts, m: sh.m, rad: size.length() / 2, rest: false };
     for (const m of group.children) { m.castShadow = m.material !== MATS.glow; m.receiveShadow = true; }
     scene.add(group); S.rigids.push(b);
     return b;
   };
-  const _r = new V3(), _vp = new V3(), _pw = new V3(), _t = new V3();
+  const _r = new V3(), _vp = new V3(), _pw = new V3(), _t = new V3(), _gr = [];
   function stepRigid(b, dt) {
     const g = b.group;
     b.v.y -= G * dt;
@@ -295,28 +300,36 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     const wl = b.w.length();
     if (wl > 1e-4) g.quaternion.premultiply(_q.setFromAxisAngle(_t.copy(b.w).divideScalar(wl), wl * dt)).normalize();
     g.updateMatrixWorld();
-    let minY = 0, touching = false;
+    // ground contacts: the support points below (or within a millimetre of) the ground, solved a few times over so
+    // a flat face shares the load evenly instead of the first corner taking it all (which made pieces hop and creep)
+    let minY = 0, touching = false, n = 0;
     for (const s of b.sup) {
       _pw.copy(s).applyMatrix4(g.matrixWorld);
-      if (_pw.y >= 0) continue;
+      if (_pw.y >= 0.001) continue;
       touching = true; minY = Math.min(minY, _pw.y);
-      _r.subVectors(_pw, g.position);
-      _vp.copy(b.w).cross(_r).add(b.v);
-      if (_vp.y >= 0) continue;
+      (_gr[n] || (_gr[n] = new V3())).subVectors(_pw, g.position); n++;
+      _vp.copy(b.w).cross(_gr[n - 1]).add(b.v);
       if (_vp.y < -2.5 && !b.landed) { b.landed = true; fx.splat(_pw.x, _pw.z, Math.min(0.5, b.I * 2 + 0.15)); if (thudCD <= 0) { sfx.thud(Math.min(1, -_vp.y / 8)); thudCD = 0.1; } }
-      const rn = _t.set(_r.z, 0, -_r.x);               // r × up
-      const j = -(1 + 0.15) * _vp.y / (1 + rn.lengthSq() / b.I);
+    }
+    for (let it = 0; it < 4; it++) for (let i = 0; i < n; i++) {
+      const r = _gr[i];
+      _vp.copy(b.w).cross(r).add(b.v);
+      if (_vp.y >= 0) continue;
+      const rn = _t.set(-r.z, 0, r.x);               // r × up
+      const j = -(1 + (it === 0 && _vp.y < -1 ? 0.15 : 0)) * _vp.y / (1 + rn.lengthSq() / b.I);   // slow contacts don't bounce
       b.v.y += j; b.w.addScaledVector(rn, j / b.I);
       // friction
-      _vp.copy(b.w).cross(_r).add(b.v); _vp.y = 0;
+      _vp.copy(b.w).cross(r).add(b.v); _vp.y = 0;
       const vt = _vp.length();
       if (vt > 1e-4) {
-        const jt = Math.min(vt / (1 + _r.lengthSq() / b.I), 0.6 * j);
         _vp.divideScalar(-vt);
-        b.v.addScaledVector(_vp, jt); b.w.addScaledVector(_t.copy(_r).cross(_vp), jt / b.I);
+        const rt = _r.copy(r).cross(_vp), jt = Math.min(vt / (1 + rt.lengthSq() / b.I), 0.6 * j);
+        b.v.addScaledVector(_vp, jt); b.w.addScaledVector(rt, jt / b.I);
       }
     }
     if (minY < 0) g.position.y -= minY;
+    if (b.rest) touching = true; b.rest = false;   // lying on another piece counts as resting too
+    b.support = touching;   // supported (by the ground or a supported piece): solid for whatever lands on it
     if (touching) b.w.multiplyScalar(0.985);
     const r = Math.hypot(g.position.x, g.position.z), Rw = W.explore ? 1e9 : W.bodyR + 0.6;
     if (r > Rw) { g.position.x *= Rw / r; g.position.z *= Rw / r; b.v.x *= -0.3; b.v.z *= -0.3; }
@@ -326,14 +339,152 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
   function cutRigid(b, plane, push, sid) {
     const res = sliceChunk(b.group, plane);
     if (!res) return null;
+    // the halves keep the rotation of the whole, so the cut plane's local normal is the same for both: adding it to
+    // their collision shapes makes them meet flush along the cut instead of overlapping
+    const ln = plane.normal.clone().transformDirection(_inv.copy(b.group.matrixWorld).invert());
+    const dirs = [...(b.group.userData.cutDirs || []), ln, ln.clone().negate()].slice(-8);
+    for (const g of res) g.userData.cutDirs = dirs;
     removeRigid(b);
+    const k = Math.min(1, 1.5 / b.group.userData.box.getSize(_t).length());   // big chunks (trees, walls, houses) part gently
     return res.map((g, i) => {
       const sd = i === 0 ? 1 : -1;
-      const v = b.v.clone().multiplyScalar(0.5).addScaledVector(plane.normal, sd * rnd(1, 2.2)).addScaledVector(push, rnd(1, 2.5)).add(new V3(0, rnd(1, 2.5), 0));
-      const nb = S.addRigid(g, v, new V3().randomDirection().multiplyScalar(rnd(3, 8)), sid);
+      const v = b.v.clone().multiplyScalar(0.5).addScaledVector(plane.normal, sd * rnd(1, 2.2) * k).addScaledVector(push, rnd(1, 2.5) * k).add(new V3(0, rnd(1, 2.5) * k, 0));
+      const nb = S.addRigid(g, v, new V3().randomDirection().multiplyScalar(rnd(3, 8) * k), sid);
       nb.cuts = b.cuts + 1;
       return nb;
     });
+  }
+
+  // ------------------------------------------------------------------ contacts between bodies
+  // Each loose piece is solid: every mesh in it gets a convex hull (the 26 box/edge/corner directions plus the
+  // planes it was cut along, in the piece's own frame). The extreme vertices of one piece are pushed out of the
+  // other piece's hulls with an impulse (restitution, friction) and a position fix. Ragdoll joints (spheres) are
+  // pushed out of pieces the same way. A sleeping piece acts as solid ground until something hits it hard.
+  function shapesOf(group) {
+    const dirs = DIRS.concat(group.userData.cutDirs || []), shapes = [], pts = []; let m = 0;
+    for (const mesh of group.children) {
+      const P = mesh.geometry.attributes.position.array; if (P.length < 9) continue;
+      const d = new Float32Array(dirs.length).fill(-1e9), ext = new Int32Array(dirs.length);
+      for (let i = 0; i < P.length; i += 3) for (let k = 0; k < dirs.length; k++) { const dk = dirs[k], v = P[i] * dk.x + P[i + 1] * dk.y + P[i + 2] * dk.z; if (v > d[k]) { d[k] = v; ext[k] = i; } }
+      const c = new V3((d[0] - d[1]) / 2, (d[2] - d[3]) / 2, (d[4] - d[5]) / 2);   // DIRS starts +x -x +y -y +z -z
+      let r = 0; for (const i of new Set(ext)) { const p = new V3(P[i], P[i + 1], P[i + 2]); r = Math.max(r, p.distanceTo(c)); pts.push(p); }
+      shapes.push({ n: dirs, d, c, r });
+      // contact points: the hull's corners above, plus points spread over the surface (about every half metre),
+      // so a face resting on a face or an edge crossing an edge is felt too, not just corners
+      const surf = [], A = new V3(), B = new V3(), C = new V3();
+      for (let i = 0; i < P.length; i += 9) {
+        A.fromArray(P, i); B.fromArray(P, i + 3); C.fromArray(P, i + 6);
+        const n = Math.min(6, Math.ceil(Math.max(A.distanceTo(B), B.distanceTo(C), C.distanceTo(A)) / 0.5));
+        for (let a = 0; a <= n; a++) for (let b = 0; a + b <= n; b++) { const u = a / n, v = b / n; surf.push(new V3().addScaledVector(A, 1 - u - v).addScaledVector(B, u).addScaledVector(C, v)); }
+      }
+      const seen = new Set();
+      for (const p of surf) { const k = Math.round(p.x * 20) + ',' + Math.round(p.y * 20) + ',' + Math.round(p.z * 20); if (!seen.has(k)) { seen.add(k); pts.push(p); } }
+      m += Math.max(d[0] + d[1], 0.02) * Math.max(d[2] + d[3], 0.02) * Math.max(d[4] + d[5], 0.02);
+    }
+    while (pts.length > MAX_PTS) pts.splice((Math.random() * pts.length) | 0, 1);   // keep contact tests cheap on big pieces
+    return { shapes, pts, m: Math.max(0.02, m * 0.6) };
+  }
+  // is local point q (a sphere of radius rr) inside one of the hulls? _hit gets the way out of the deepest hull:
+  // back through the face it came in by this frame (mv = its local motion), else the nearest face. Fast pieces
+  // sink deeper in one frame than a corner is from the side faces, so "nearest face" alone would shove them sideways.
+  const _hit = { depth: 0, n: null };
+  function inside(shapes, q, rr, mv = null) {
+    let best = -1;
+    for (const s of shapes) {
+      if (q.distanceToSquared(s.c) > (s.r + rr) * (s.r + rr)) continue;
+      let mn = 1e9, mk = null, te = -1, ek = -1;
+      for (let k = 0; k < s.n.length; k++) {
+        const n = s.n[k], nq = n.x * q.x + n.y * q.y + n.z * q.z, sl = s.d[k] + rr - nq;
+        if (sl < 0) { mn = -1; break; }
+        if (sl < mn) { mn = sl; mk = n; }
+        if (mv) { const nm = n.x * mv.x + n.y * mv.y + n.z * mv.z, out0 = nq - nm - s.d[k] - rr; if (out0 > 0 && nm < 0) { const t = out0 / -nm; if (t > te) { te = t; ek = k; } } }
+      }
+      if (mn < 0) continue;
+      if (ek >= 0) { mk = s.n[ek]; mn = s.d[ek] + rr - (mk.x * q.x + mk.y * q.y + mk.z * q.z); }
+      if (mn > best) { best = mn; _hit.n = mk; }
+    }
+    _hit.depth = best; return best > 0;
+  }
+  const _iq = new THREE.Quaternion(), _mv = new V3(), _pw2 = new V3(), _ql = new V3(), _n = new V3(), _ra = new V3(), _rb = new V3(), _vr = new V3(), _x = new V3(), _y = new V3(), _tg = new V3(), _ib = new THREE.Matrix4();
+  const SLOP = 0.005, E = 0.1, MU = 0.6, MAX_PTS = 320;
+  // A's points against B's hulls (the normal points out of B). All the contacts are found first and then solved
+  // together a few times over, so a face landing on a face shares the load evenly instead of the first points
+  // taking it all (which set pieces spinning); the overlap is then fixed once, by the deepest contact.
+  const _cs = [];
+  function contacts(A, B, dt) {
+    _ib.copy(B.group.matrixWorld).invert(); _iq.copy(B.group.quaternion).invert();
+    let nc = 0, deep = -1, hard = 0;
+    for (const p of A.pts) {
+      _pw2.copy(p).applyMatrix4(A.group.matrixWorld); _ql.copy(_pw2).applyMatrix4(_ib);
+      if (_ql.lengthSq() > B.rad * B.rad * 1.1) continue;
+      _ra.subVectors(_pw2, A.group.position); _rb.subVectors(_pw2, B.group.position);
+      _vr.copy(A.w).cross(_ra).add(A.v).sub(_x.copy(B.w).cross(_rb).add(B.v));
+      _mv.copy(_vr).applyQuaternion(_iq).multiplyScalar(dt);
+      if (!inside(B.shapes, _ql, 0, _mv) || _hit.depth < SLOP) continue;
+      const c = _cs[nc] || (_cs[nc] = { ra: new V3(), rb: new V3(), n: new V3(), depth: 0 }); nc++;
+      c.ra.copy(_ra); c.rb.copy(_rb); c.n.copy(_hit.n).applyQuaternion(B.group.quaternion); c.depth = _hit.depth;
+      if (deep < 0 || c.depth > _cs[deep].depth) deep = nc - 1;
+      hard = Math.min(hard, _vr.dot(c.n));
+    }
+    if (!nc) return;
+    if (hard < -1.5) { if (B.asleep) S.wake(B); if (A.asleep) S.wake(A); }   // a hard hit knocks a resting piece loose
+    if (hard < -2.5 && thudCD <= 0) { sfx.thud(Math.min(1, -hard / 8)); thudCD = 0.1; }
+    // shock propagation: a supported piece holds up what rests on it instead of being pressed into the ground
+    const up = _cs[deep].n.y, aBelow = up < -0.5 && A.support, bBelow = up > 0.5 && B.support;
+    const ia = A.asleep || aBelow ? 0 : 1 / A.m, ib = B.asleep || bBelow ? 0 : 1 / B.m, iia = ia / A.I, iib = ib / B.I;
+    if (!ia && !ib) return;
+    for (let it = 0; it < 4; it++) for (let i = 0; i < nc; i++) {
+      const c = _cs[i];
+      _vr.copy(A.w).cross(c.ra).add(A.v).sub(_x.copy(B.w).cross(c.rb).add(B.v));
+      const vn = _vr.dot(c.n); if (vn >= 0) continue;
+      const ca = _x.copy(c.ra).cross(c.n), cb = _y.copy(c.rb).cross(c.n);
+      const j = -(1 + (it === 0 && vn < -1 ? E : 0)) * vn / (ia + ib + ca.lengthSq() * iia + cb.lengthSq() * iib);   // slow contacts don't bounce
+      A.v.addScaledVector(c.n, j * ia); A.w.addScaledVector(ca, j * iia);
+      B.v.addScaledVector(c.n, -j * ib); B.w.addScaledVector(cb, -j * iib);
+      // friction against the sliding direction
+      _vr.copy(A.w).cross(c.ra).add(A.v).sub(_x.copy(B.w).cross(c.rb).add(B.v));
+      _tg.copy(_vr).addScaledVector(c.n, -_vr.dot(c.n)); const vt = _tg.length();
+      if (vt > 1e-4) {
+        _tg.divideScalar(vt);
+        const ta = _x.copy(c.ra).cross(_tg), tb = _y.copy(c.rb).cross(_tg);
+        const jt = Math.min(vt / (ia + ib + ta.lengthSq() * iia + tb.lengthSq() * iib), MU * j);
+        A.v.addScaledVector(_tg, -jt * ia); A.w.addScaledVector(ta, -jt * iia);
+        B.v.addScaledVector(_tg, jt * ib); B.w.addScaledVector(tb, jt * iib);
+      }
+    }
+    const D = _cs[deep], corr = Math.min(0.2, D.depth - SLOP) * 0.8 / (ia + ib);
+    A.group.position.addScaledVector(D.n, corr * ia); B.group.position.addScaledVector(D.n, -corr * ib);
+    A.group.updateMatrixWorld(); B.group.updateMatrixWorld();
+    if (up > 0.3) A.rest = true; else if (up < -0.3) B.rest = true;   // the one on top is resting on the other
+  }
+  function collideBodies(dt) {
+    const L = S.rigids.filter(b => !b.sink);
+    for (const b of L) b.group.updateMatrixWorld();
+    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
+      const A = L[i], B = L[j]; if (A.asleep && B.asleep) continue;
+      const rr = A.rad + B.rad; if (A.group.position.distanceToSquared(B.group.position) > rr * rr) continue;
+      contacts(A, B, dt); contacts(B, A, dt);
+    }
+    // ragdoll joints against pieces: pushed out, inward velocity removed, some friction; a moving piece wakes a sleeping body
+    for (const d of S.dolls) {
+      if (d.sink) continue;
+      for (const B of L) {
+        if (d.pts[0].p.distanceToSquared(B.group.position) > (B.rad + 1.6) * (B.rad + 1.6)) continue;
+        _ib.copy(B.group.matrixWorld).invert();
+        if (d.asleep) {
+          if (B.asleep || B.v.lengthSq() < 1) continue;
+          if (d.pts.some(pt => inside(B.shapes, _ql.copy(pt.p).applyMatrix4(_ib), pt.r))) S.wake(d); else continue;
+        }
+        for (const pt of d.pts) {
+          _ql.copy(pt.p).applyMatrix4(_ib); if (!inside(B.shapes, _ql, pt.r)) continue;
+          _n.copy(_hit.n).applyQuaternion(B.group.quaternion);
+          pt.p.addScaledVector(_n, _hit.depth);
+          _vr.subVectors(pt.p, pt.o); const vn = _vr.dot(_n);
+          if (vn < 0) pt.o.addScaledVector(_n, vn);
+          _vr.subVectors(pt.p, pt.o); _tg.copy(_vr).addScaledVector(_n, -_vr.dot(_n)); pt.o.addScaledVector(_tg, 0.45);
+        }
+      }
+    }
   }
 
   // ------------------------------------------------------------------ public
@@ -382,6 +533,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       if (b.sink > 0) { b.sink += dt * (b.poof ? 4 : 1); b.group.position.y -= dt * 0.35 * (b.poof ? 4 : 1); if (b.sink > 2.2) removeRigid(b); continue; }
       if (!b.asleep) stepRigid(b, dt);
     }
+    if (dt > 0) collideBodies(dt);
     // severed stumps keep pumping for a moment
     for (const bl of S.bleed.slice()) {
       bl.t -= dt;
