@@ -372,7 +372,8 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       // contact points: the hull's corners above, plus points spread over the surface (about every half metre),
       // so a face resting on a face or an edge crossing an edge is felt too, not just corners
       const surf = [], A = new V3(), B = new V3(), C = new V3();
-      for (let i = 0; i < P.length; i += 9) {
+      const step = 9 * Math.max(1, Math.ceil(P.length / 9 / 150));   // big meshes: a spread of ~150 triangles is plenty
+      for (let i = 0; i + 8 < P.length; i += step) {
         A.fromArray(P, i); B.fromArray(P, i + 3); C.fromArray(P, i + 6);
         const n = Math.min(6, Math.ceil(Math.max(A.distanceTo(B), B.distanceTo(C), C.distanceTo(A)) / 0.5));
         for (let a = 0; a <= n; a++) for (let b = 0; a + b <= n; b++) { const u = a / n, v = b / n; surf.push(new V3().addScaledVector(A, 1 - u - v).addScaledVector(B, u).addScaledVector(C, v)); }

@@ -18,7 +18,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const V3 = THREE.Vector3;
 const UP = new V3(0, 1, 0), YAX = new V3(0, 1, 0);
 const QS = new URLSearchParams(location.search);
-const DEV = ['localhost', '127.0.0.1'].includes(location.hostname);   // dev-only URL switches never work on the live site
+const DEV = ['localhost', '127.0.0.1'].includes(location.hostname);
+let dbgDraw = '', frameCount = 0;   // dev (&dbg): draw calls and triangles of the last frame, shown in the tab title   // dev-only URL switches never work on the live site
 const AUTO = DEV && QS.has('auto');                // dev: autopilot swipes (for testing)
 
 /* ============ save ============ */
@@ -96,7 +97,7 @@ let locked = false, blade = false, lockFail = false, lockErrs = 0;
 let vw = innerWidth, vh = innerHeight;
 
 function setupRenderer() {
-  renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: quality === 'high', powerPreference: 'high-performance' });   // LOW skips multisampling (costly at 1080p on integrated graphics)
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NeutralToneMapping;   // keeps the paper and ink colours true
   renderer.shadowMap.enabled = true;
@@ -106,37 +107,48 @@ function setupRenderer() {
   camera.rotation.order = 'YXZ';
   scene.add(camera);
 }
-// Dynamic resolution: drop render scale when frames run slow, raise it again once there is headroom.
-const dynRes = { scale: 1, acc: 0, n: 0, cool: 0, slowS: 0 };
-const MIN_RS = 0.5;
-function basePR() { return Math.min(devicePixelRatio || 1, quality === 'high' ? 1.5 : 1); }
-function setRenderScale(sc) {
-  dynRes.scale = sc;
-  renderer.setPixelRatio(basePR() * sc);
-  renderer.setSize(vw, vh, false);
-  if (composer) composer.setSize(vw, vh);
-}
+// Slow-frame fallback: after 3 slow seconds of play, switch HIGH to LOW once. The render size is never changed on
+// the fly: resizing the canvas and the post-processing targets stalls the GPU for up to a second, and most frames
+// are limited by draw calls rather than pixels anyway. Menus, pause, cutscenes and the first seconds of a new
+// screen or stage (shader compiles, uploads) don't count.
+const dynRes = { scale: 1, acc: 0, n: 0, slow: 0, st: null, settle: 0 };
+// LOW renders at most 720 pixels tall (the browser scales the picture up): on a 1080p laptop screen that's
+// two-thirds of the pixels to shade, which integrated graphics need. Set at start and on resize only.
+function basePR() { return quality === 'high' ? Math.min(devicePixelRatio || 1, 1.5) : Math.min(devicePixelRatio || 1, 1, 720 / Math.max(1, innerHeight)); }
 function tuneRes(rdt) {
+  if (state !== dynRes.st || state !== 'play' || finish) { dynRes.st = state; dynRes.settle = 2.5; dynRes.acc = dynRes.n = dynRes.slow = 0; return; }   // menus, pause and cutscenes don't count
+  if (dynRes.settle > 0) { dynRes.settle -= Math.min(rdt, 0.1); return; }
   if (document.hidden || rdt <= 0 || rdt >= 0.25) return;   // ignore tab switches and one-off hitches (rdt is the raw, unclamped frame time)
   dynRes.acc += rdt; dynRes.n++;
   if (dynRes.acc < 1) return;
   const avg = dynRes.acc / dynRes.n; dynRes.acc = dynRes.n = 0;
-  // still under ~40 fps at the lowest render scale: drop bloom and soft shadows for the rest of the session
-  if (quality === 'high' && dynRes.scale <= MIN_RS && avg > 1 / 40) { if (++dynRes.slowS >= 3) { quality = 'low'; applyQuality(); updToggles(); toast('Switched to LOW quality for smoother play'); } return; }
-  dynRes.slowS = 0;
-  if (dynRes.cool > 0) { dynRes.cool--; return; }
-  const minS = MIN_RS;
-  if (avg > 1 / 50 && dynRes.scale > minS) { setRenderScale(Math.max(minS, dynRes.scale - (avg > 1 / 35 ? 0.25 : 0.15))); dynRes.cool = 1; }
-  else if (avg < 1 / 58 && dynRes.scale < 1) { setRenderScale(Math.min(1, dynRes.scale + 0.1)); dynRes.cool = 3; }
+  dynRes.slow = avg > 1 / 45 ? dynRes.slow + 1 : 0;
+  if (dynRes.slow < 3) return;
+  dynRes.slow = 0;
+  // drop bloom and soft shadows for the rest of the session
+  if (quality === 'high') { quality = 'low'; applyQuality(); updToggles(); toast('Switched to LOW quality for smoother play'); }
+}
+// laptop/phone graphics (Intel, Mali, Adreno, PowerVR) start on LOW unless the player picked a quality
+function integratedGPU() {
+  try {   // asked of a throwaway context: this runs before the renderer exists
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl'), d = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    const name = d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : ''; gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return /intel|mali|adreno|powervr|swiftshader|llvmpipe/i.test(name);
+  } catch (e) { return false; }
 }
 function applyQuality() {
   const hi = quality === 'high';
-  dynRes.scale = 1; dynRes.slowS = 0;
+  dynRes.scale = 1; dynRes.slow = 0;
   renderer.setPixelRatio(basePR());
   if (world) {
     const s = hi ? 2048 : 1024; world.sun.shadow.mapSize.set(s, s);
     if (world.sun.shadow.map) { world.sun.shadow.map.dispose(); world.sun.shadow.map = null; }
+    world.shadowR = hi ? 45 : 25;   // how far round you scenery casts shadows
+    if (world.lowMat === hi) { world.lowMat = !hi; if (world.map) world.setMap(world.map, true); }   // scenery materials follow the quality
   }
+  // LOW: hard-edged shadow filtering, and the shadow map redrawn every other frame (see frame())
+  renderer.shadowMap.type = hi ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = hi;
   if (composer) { composer.dispose(); composer = null; }
   if (hi) {
     const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 2 });
@@ -150,6 +162,7 @@ function applyQuality() {
 }
 function resize() {
   vw = innerWidth; vh = innerHeight;
+  renderer.setPixelRatio(basePR());
   renderer.setSize(vw, vh, false);
   if (composer) composer.setSize(vw, vh);
   camera.aspect = vw / vh;
@@ -1973,8 +1986,8 @@ function drawMinimap() {
 // and a temper (what they say). Walk up to one to talk (T) or challenge them to a duel (R). Duels are never to
 // the death: a beaten rival kneels and yields (coins by rank), and if you lose you're knocked down with hearts restored.
 // Talking gets you their story, rumours of hidden charms (direction and distance) and fighting tips.
-const NPC_N = 20;   // rivals kept round you (fewer on low graphics)
-const npcCap = () => quality === 'high' ? NPC_N : 12;
+const NPC_N = 12;   // rivals kept round you (fewer on low graphics)
+const npcCap = () => quality === 'high' ? NPC_N : 8;
 let npcs = [], talkNPC = null, duelNPC = null;
 const NPC_NAMES = ['Kenji', 'Haru', 'Sora', 'Ren', 'Aki', 'Yumi', 'Daichi', 'Kaede', 'Ryo', 'Mei', 'Takeshi', 'Nori', 'Hikaru', 'Suzu', 'Isamu', 'Chiyo', 'Botan', 'Jiro', 'Kiku', 'Masa', 'Tora', 'Rin'];
 const CLANS = [
@@ -2032,6 +2045,7 @@ function kneel(e, dt) {   // yielding: down on one knee, head bowed
   rotTo(P.hips, 0.25, k); rotTo(P.legL, -1.5, k); rotTo(P.kneeL, 1.6, k); rotTo(P.legR, -0.1, k); rotTo(P.kneeR, 1.7, k);
   rotTo(P.head, 0.55, k); rotTo(P.armL, -0.3, k); rotTo(P.armR, -0.2, k); rotTo(P.elbowR, -0.3, k);
 }
+const NPC_DRAW_R = 45, NPC_SHADOW_R = 25;
 function updNPCs(dt) {
   if (!stage || !stage.explore) return;
   // keep a handful of rivals round you as you travel the endless map
@@ -2057,7 +2071,10 @@ function updNPCs(dt) {
       }
     }
     if (dist < 12 && (N.sayCD -= dt) <= 0 && e !== talkNPC) { say(e, N.beaten ? TEMPER[N.temper].beaten : pickOne(TEMPER[N.temper].idle)); N.sayCD = rnd(9, 18); }
-    animEnemy(e, dt); e.root.position.set(e.x, 0, e.z);
+    // far rivals keep walking but aren't drawn, posed or matrix-updated (a dozen draw calls each, mostly lost in the fog)
+    const show = dist < NPC_DRAW_R; e.root.visible = show; e.root.matrixWorldAutoUpdate = show;
+    const sh = dist < NPC_SHADOW_R; if (e.npc.sh !== sh) { e.npc.sh = sh; e.root.traverse(m => { if (m.isMesh) m.castShadow = sh; }); }   // only the near ones cast shadows
+    if (show) animEnemy(e, dt); e.root.position.set(e.x, 0, e.z);
   }
 }
 const nearNPC = () => { let b = null, bd = 3.2; for (const e of npcs) { if (e === duelNPC || e.npc.yieldT > 0) continue; const d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z); if (d < bd) { bd = d; b = e; } } return b; };
@@ -2403,7 +2420,7 @@ function frame(now) {
   rawDt = (now - last) / 1000;
   step(Math.min(0.05, rawDt), now); last = now;
 }
-const _camT = new V3();
+const _camT = new V3(), cam = { yaw: 0, pitch: 0, p: new V3(), dist: 3.7, init: false };   // the smoothed third-person camera rig
 function step(rdt, now, draw = true) {
   T += rdt;
   const running = state === 'play' || state === 'clearing' || state === 'gameover';
@@ -2449,12 +2466,22 @@ function step(rdt, now, draw = true) {
       const wide = save.cam === 'wide';
       let dist = wide ? 6.8 : 3.7;
       const side = wide ? 0 : 0.95, lift = wide ? 1.5 : 0.45;
-      const pitch = clamp(player.pitch + (wide ? -0.32 : -0.08), -1.3, 0.9), yaw = player.yaw;
+      // The camera rig is smoothed as a whole: the look angles, the pivot over the shoulder and the boom length
+      // each ease toward their targets, and the camera sits exactly on the boom. (Easing only the position while
+      // the rotation snapped made the two disagree whenever you turned or strafed, so the view shuddered.)
+      const snap = state !== 'play' || !cam.init || Math.hypot(player.pos.x - cam.p.x, player.pos.z - cam.p.z) > 8,   // new stage or a teleport: no swoop
+        ka = snap ? 1 : 1 - Math.exp(-rdt * 40), kp = snap ? 1 : 1 - Math.exp(-rdt * 18), ky = snap ? 1 : 1 - Math.exp(-rdt * 10);
+      cam.yaw += Math.atan2(Math.sin(player.yaw - cam.yaw), Math.cos(player.yaw - cam.yaw)) * ka;
+      cam.pitch += (clamp(player.pitch + (wide ? -0.32 : -0.08), -1.3, 0.9) - cam.pitch) * ka;
+      const pitch = cam.pitch, yaw = cam.yaw;
       const fx = -Math.sin(yaw) * Math.cos(pitch), fy = Math.sin(pitch), fz = -Math.cos(yaw) * Math.cos(pitch);
-      const hx = player.pos.x + Math.cos(yaw) * side, hy = 1.55 + lift + player.y * 0.75 - landDip, hz = player.pos.z - Math.sin(yaw) * side;
+      cam.p.x += (player.pos.x + Math.cos(yaw) * side - cam.p.x) * kp; cam.p.z += (player.pos.z - Math.sin(yaw) * side - cam.p.z) * kp;
+      cam.p.y += (1.55 + lift + player.y * 0.75 - landDip - cam.p.y) * ky;   // jumps and landings lift and dip it softly
+      const hx = cam.p.x, hy = cam.p.y, hz = cam.p.z;
       for (let i = 0; i < 6 && Math.hypot(hx - fx * dist, hz - fz * dist) > world.camR; i++) dist *= 0.8;   // stay out of the scenery past the arena
-      const kc = 1 - Math.exp(-rdt * 16);
-      camera.position.lerp(_camT.set(hx - fx * dist, Math.max(0.35, hy - fy * dist), hz - fz * dist), state === 'play' ? kc : 1);
+      cam.dist = snap || dist < cam.dist ? dist : cam.dist + (dist - cam.dist) * (1 - Math.exp(-rdt * 5));   // pull in at once, ease back out
+      cam.init = true;
+      camera.position.set(hx - fx * cam.dist, Math.max(0.35, hy - fy * cam.dist), hz - fz * cam.dist);
       camera.rotation.set(pitch, yaw, 0);
     }
     if (finish && state === 'play') cineCam(); else cineW = 0;
@@ -2466,11 +2493,14 @@ function step(rdt, now, draw = true) {
   camera.updateMatrixWorld();
   updateVM(rdt, T);
   if (!draw) return;
+  if (DEV && QS.has('dbg')) renderer.info.autoReset = false;   // dev: count every pass of the frame
+  if (!renderer.shadowMap.autoUpdate) renderer.shadowMap.needsUpdate = (frameCount++ & 1) === 0;
   if (composer) composer.render(); else renderer.render(scene, camera);
+  if (DEV && QS.has('dbg')) { dbgDraw = `dc=${renderer.info.render.calls} tri=${(renderer.info.render.triangles / 1000).toFixed(0)}k geo=${renderer.info.memory.geometries} prog=${renderer.info.programs.length}`; renderer.info.reset(); }
   tuneRes(rawDt);
   drawTrail(performance.now());
   drawThreats(); drawMinimap(); drawNPCTags();
-  if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
+  if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `${dbgDraw} ${quality} f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
 }
 
 /* ============ boot ============ */
@@ -2482,7 +2512,7 @@ async function boot() {
   sdk.onAuth = () => { loadSave(); if (state === 'menu') updMenu(); updCoins(); };
   loadSave();
   if (DEV && QS.get('style')) save.style = QS.get('style');   // dev: &style=ink|real
-  quality = save.q || (sdk.touch ? 'low' : 'high');
+  quality = save.q || (sdk.touch || integratedGPU() ? 'low' : 'high');
   document.body.classList.toggle('touch', sdk.touch);
   if (sdk.touch) $('menuHint').innerHTML = 'Left thumb: move &amp; turn · Right side: swipe to slice<br>Tap to throw · JUMP twice to flip · DASH to dodge · STORM when charged';
   $('lockHint').addEventListener('click', () => { audio.unlock(); requestLock(); });
@@ -2493,6 +2523,7 @@ async function boot() {
   setupRenderer();
   await new Promise(r => setTimeout(r, 30));
   world = buildWorld(scene, renderer, quality);
+  if (DEV) window.__dev = { scene, renderer, camera };   // dev: poke at the scene from the console
   world.style = save.style; world.setStyle(save.style); world.setMap(stageMap(save.sel));
   fx = makeFX(scene); fx.blood = save.blood;
   phys = makePhysics(scene, fx, sfx, world);
