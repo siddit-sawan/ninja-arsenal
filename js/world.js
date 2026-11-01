@@ -820,24 +820,30 @@ export function buildWorld(scene, renderer, quality) {
     W.mmLayer = null;
     W.setTheme(curTheme);
     W.setExplore(W.explore);
-    warmCutMaterials();
+    warmQ = null; warmDelay = 1;   // the cut-material warm-up runs later, spread over frames (explore only)
   };
   // The cut pieces of each scenery material use a vertex-coloured copy of it (cutMat); compiling that shader the
   // first time something made of it was cut froze the game for a few hundred ms mid-fight. So the copies are
   // compiled when the map loads (during the screen change anyway), against the real scene's lights and fog.
-  function warmCutMaterials() {
+  let warmQ = null, warmDelay = 0;
+  function warmCutMaterials() {   // a little each frame: two materials compiled per frame instead of all at once
+    if (!warmQ) { warmQ = [...cutMaterialsOf()]; }
+    const tmp = new THREE.Scene(), cam = new THREE.PerspectiveCamera(), g = WARM_GEO;
+    for (const m of warmQ.splice(0, 2)) { const o = new THREE.Mesh(g, m.isMeshBasicMaterial ? MATS.glow : cutMat(m)); o.castShadow = o.receiveShadow = true; tmp.add(o); }
+    try { renderer.compile(tmp, cam, scene); } catch (e) {}
+    return warmQ.length > 0;
+  }
+  function cutMaterialsOf() {
     const mats = new Set();
     for (const pr of props) {
       for (const it of pr.inst) { const im = G.getObjectByName(it.name); if (im) mats.add(im.material); }
       for (const rg of pr.ranges) mats.add(rg.mat);
     }
-    const tmp = new THREE.Scene(), cam = new THREE.PerspectiveCamera(), g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2)); g.setAttribute('color', new THREE.Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
-    for (const m of mats) { const c = m.isMeshBasicMaterial ? MATS.glow : cutMat(m), o = new THREE.Mesh(g, c); o.castShadow = o.receiveShadow = true; tmp.add(o); }
-    try { renderer.compile(tmp, cam, scene); } catch (e) {}   // (compileAsync trips over the separate light scene in this three.js)
-    g.dispose();
+    return mats;
   }
+  const WARM_GEO = new THREE.BufferGeometry();   // one triangle with every attribute a cut piece has
+  WARM_GEO.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)); WARM_GEO.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
+  WARM_GEO.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2)); WARM_GEO.setAttribute('color', new THREE.Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
   // one mesh per material (and shadow flag) for everything static in the tile; instanced batches stay as they are
   function mergeStatic(root) {
     root.updateMatrixWorld(true);
@@ -988,7 +994,7 @@ export function buildWorld(scene, renderer, quality) {
   W.setTheme = (i) => { curTheme = i; W.skyState = null; rainK = 0; applyTheme(THEMES_REAL[i], true); };
   // explore: blend two themes (a to b by t) under a weather; env: also rebuild the reflections (costly, so throttled)
   const COLS = ['top', 'mid', 'bot', 'sun', 'fog', 'light', 'hemiS', 'hemiG', 'cloud', 'blossom'], _ca = new THREE.Color(), _cb = new THREE.Color(), GREY = new THREE.Color(0x707680);
-  W.setSky = (a, b, t, w, env) => {
+  W.setSky = (a, b, t, w, env, ranges = true) => {
     W.skyState = { a, b, t, w };
     const T = {};
     for (const k in a) { const va = a[k], vb = b[k] ?? va; T[k] = typeof va === 'number' ? va + (vb - va) * t : t < 0.5 ? va : vb; }
@@ -997,9 +1003,9 @@ export function buildWorld(scene, renderer, quality) {
     T.clouds = Math.min(1, (T.clouds || 0) + w.cover); T.fogD *= w.fogMul; T.li *= 1 - 0.55 * w.dim; T.hi *= 1 - 0.25 * w.dim;
     for (const k of ['top', 'mid', 'fog', 'cloud']) T[k] = _ca.set(T[k]).lerp(GREY.clone().multiplyScalar(k === 'cloud' ? 0.8 : 0.9 * (0.4 + 0.6 * T.li / 3)), w.dim * 0.6).getHex();
     rainK = w.rain;
-    applyTheme(T, env);
+    applyTheme(T, env, ranges);
   };
-  function applyTheme(T, env) {
+  function applyTheme(T, env, ranges = true) {
     skyU.top.value.set(T.top); skyU.mid.value.set(T.mid); skyU.bot.value.set(T.bot); skyU.sunCol.value.set(T.sun);
     skyU.sunDir.value.set(...T.sunDir).normalize(); skyU.sunSize.value = T.sunSize; skyU.moon.value = T.moon ? 1 : 0;
     skyU.cover.value = T.clouds ?? 0; skyU.cloudCol.value.set(T.cloud ?? 0xffffff);
@@ -1016,7 +1022,7 @@ export function buildWorld(scene, renderer, quality) {
     starMat.opacity = T.stars;
     const pc = snowy ? 0xffffff : W.particles === 'leaves' ? 0x7a8a3a : T.blossom;
     petalMat.color.set(pc); petalMat.emissive.set(snowy ? 0x606870 : 0x401020); petalMat.emissiveIntensity = snowy ? 0.6 : 0.4;
-    colourRanges(T);
+    if (ranges) colourRanges(T);   // re-uploads every mountain vertex colour: the day cycle does it once a second
     hemiEnv.material.color.set(T.hemiG);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = T.exposure * 0.95;
@@ -1046,6 +1052,7 @@ export function buildWorld(scene, renderer, quality) {
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
   const wrap = (v, c, h) => v - c > h ? v - 2 * h : v - c < -h ? v + 2 * h : v;
   W.update = (dt, t, cam) => {
+    if (W.explore && warmDelay > 0 && (warmDelay -= dt) <= 0) warmDelay = warmCutMaterials() ? 0.0001 : 0;   // spread over frames
     skyU.time.value = t;
     // the shadow box rides with the camera (snapped, so shadows don't shimmer)
     const sx = Math.round(cam.x / 4) * 4, sz = Math.round(cam.z / 4) * 4;

@@ -52,8 +52,18 @@ function tone(t, type, f0, f1, dur, vol, a = 0.005, out = sfxBus) {
   o.connect(g); g.connect(out); o.start(t); o.stop(t + a + dur + 0.05);
 }
 const ok = () => ctx && sfxOn && !muted;
+// Voice cap: the same effect at most once every 35 ms, and no more than 14 effects starting in any 100 ms window.
+// Past that, extra copies are dropped: they'd be inaudible in the pile-up anyway and would starve the audio thread.
+const lastPlay = {}, recent = [];
+function voice(name) {
+  const t = ctx.currentTime;
+  if (t - (lastPlay[name] ?? -1) < 0.035) return false;
+  while (recent.length && t - recent[0] > 0.1) recent.shift();
+  if (recent.length >= 14) return false;
+  lastPlay[name] = t; recent.push(t); return true;
+}
 
-export const sfx = {
+const sfxRaw = {
   swish(p = 1) { if (!ok()) return; const t = now(); noise(t, 0.16, 'bandpass', 700 * p, 3200 * p, 1.6, 0.35); },
   slice(big = 1) {
     if (!ok()) return; const t = now();
@@ -97,6 +107,8 @@ export const sfx = {
   },
   lose() { if (!ok()) return; const t = now(); [440, 349, 294, 220].forEach((f, i) => pluck(t + i * 0.18, f, 0.25, sfxBus)); },
 };
+export const sfx = Object.fromEntries(Object.entries(sfxRaw).map(([k, f]) => [k, (...a) => { if (ctx && (k === 'sliceAt' || voice(k))) f(...a); }]));
+
 
 // koto-like pluck
 function pluck(t, f, vol, out) {
@@ -124,7 +136,8 @@ function tick() {
   if (!ctx || mode === 'off') return;
   const bpm = mode === 'boss' ? 132 : mode === 'battle' ? 112 : 76;
   const sp = 60 / bpm / 2;
-  while (nextT < ctx.currentTime + 0.2) {
+  if (nextT < ctx.currentTime) nextT = ctx.currentTime + 0.02;   // fell behind (the tab slept or a frame stalled): carry on, don't burst
+  while (nextT < ctx.currentTime + 1.0) {   // a second ahead: a frame stall (map build, shader compile) can't open a gap
     const s = step % 16, t = nextT;
     if (musOn && !muted) {
       if (s === 0 && step % 64 === 0) newPhrase();
@@ -144,6 +157,6 @@ export function music(m) {
   if (!ensure()) return;
   if (m === mode) return;
   mode = m;
-  if (!timer) timer = setInterval(tick, 50);
+  if (!timer) timer = setInterval(tick, 100);
   nextT = ctx.currentTime + 0.05; step = 0; newPhrase();
 }

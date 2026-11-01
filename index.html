@@ -276,6 +276,7 @@ html,body{background:#e9dcc0;color:var(--txt)}
 #mpLabel{min-width:220px;max-width:320px;font-family:"Brush","Segoe UI",system-ui,sans-serif;font-size:18px;color:var(--ink);line-height:1.1}
 #mpLabel small{display:block;font-family:"Segoe UI",system-ui,sans-serif;font-size:10px;letter-spacing:.12em;color:var(--mut);margin-top:3px}
 #exploreBtn:disabled{opacity:.4}
+#veil{position:fixed;inset:0;z-index:60;background:#0b0a10;opacity:0;pointer-events:none;transition:opacity .18s}#veil.on{opacity:.55;pointer-events:auto;transition:opacity .06s}
 /* UI scale: in a small window (the site's embed, not fullscreen) the whole interface shrinks with it (--ui, set in
    resize(); desktop only, touch screens keep their own sizes). Elements placed by script at screen positions (name
    tags, prompts, floating numbers) are left out. */
@@ -330,6 +331,7 @@ body.touch #dlgOpts .btn i{display:none}
 <div id="npcPrompt" class="hidden"><button id="npcTalk"><b>T</b>Talk</button><button id="npcDuel"><b>R</b>Duel</button></div>
 <div id="dlg" class="panel hidden"><div id="dlgName"></div><p id="dlgText"></p><div id="dlgOpts"></div></div>
 <div id="banner"></div>
+<div id="veil"></div>
 <div id="tut" class="hidden"><div class="hand"></div><span id="tutTxt">SWIPE TO SLICE</span></div>
 
 <div id="hud" class="hidden">

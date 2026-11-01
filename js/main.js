@@ -1975,17 +1975,30 @@ function updMenu() {
   updCoins();
 }
 const click = (id, fn) => $(id).addEventListener('click', () => { audio.unlock(); sfx.click(); fn(); });
+// Changes that build a map or spawn a crowd take a moment: the veil goes up on the click, the work runs once it has
+// been painted, and the veil fades away. The button answers at once instead of freezing on the old screen.
+let veilBusy = false;
+function heavy(fn) {
+  return () => {
+    if (veilBusy) return; veilBusy = true;
+    const v = $('veil'); v.classList.add('on');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try { fn(); } finally { veilBusy = false; requestAnimationFrame(() => v.classList.remove('on')); }
+    }));
+  };
+}
 // the menu backdrop shows the map and time of day the selected stage will be played in
 function menuWorld() { world.setExplore(false); world.setMap(stageMap(save.sel)); world.setTheme(save.sel % 5 === 0 ? 3 : (save.sel - 1) % 3); }
-click('stPrev', () => { save.sel = Math.max(1, save.sel - 1); updMenu(); menuWorld(); });
-click('stNext', () => { save.sel = Math.min(save.stage, save.sel + 1); updMenu(); menuWorld(); });
+let mwT = 0; const menuWorldSoon = () => { clearTimeout(mwT); mwT = setTimeout(() => { if (state === 'menu') menuWorld(); }, 250); };   // rebuilt once the clicking stops
+click('stPrev', () => { save.sel = Math.max(1, save.sel - 1); updMenu(); menuWorldSoon(); });
+click('stNext', () => { save.sel = Math.min(save.stage, save.sel + 1); updMenu(); menuWorldSoon(); });
 const MAP_OPTS = ['auto', ...MAPS.map(m => m.id)];
-const cycleMap = d => { save.map = MAP_OPTS[(MAP_OPTS.indexOf(save.map) + d + MAP_OPTS.length) % MAP_OPTS.length]; persist(); updMenu(); menuWorld(); };
+const cycleMap = d => { save.map = MAP_OPTS[(MAP_OPTS.indexOf(save.map) + d + MAP_OPTS.length) % MAP_OPTS.length]; persist(); updMenu(); menuWorldSoon(); };
 click('mpPrev', () => cycleMap(-1));
 click('mpNext', () => cycleMap(1));
-click('exploreBtn', () => startExplore(stageMap(save.sel)));
-click('playBtn', () => save.tutDone ? playStage(save.sel, false) : startTutorial());
-click('tutorialBtn', () => startTutorial());
+click('exploreBtn', heavy(() => startExplore(stageMap(save.sel))));
+click('playBtn', heavy(() => save.tutDone ? playStage(save.sel, false) : startTutorial()));
+click('tutorialBtn', heavy(() => startTutorial()));
 click('charsBtn', () => { state = 'chars'; vmMode = 'hand'; chSel = save.char; showLayer('chars'); renderChars(); });
 click('chBack', () => { state = 'menu'; showLayer('menu'); if (chShown !== save.char) { buildHero(save.char); chShown = save.char; } updMenu(); });
 let chSel = 'kage', chShown = 'kage';
@@ -2103,13 +2116,13 @@ $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.targ
 
 // pause / results / game over
 click('resumeBtn', resumeAndLock);
-click('restartBtn', () => { bankRunCoins(); if (stage.tutorial) startTutorial(); else if (stage.explore) startExplore(stage.map); else playStage(stage.n, true); });
+click('restartBtn', heavy(() => { bankRunCoins(); if (stage.tutorial) startTutorial(); else if (stage.explore) startExplore(stage.map); else playStage(stage.n, true); }));
 click('skipTutBtn', () => { if (guide) { endGuide(false); resumeAndLock(); return; } save.tutDone = true; persist(); toMenu(); });
 click('tutSkip', () => { if (guide) { endGuide(false); return; } save.tutDone = true; persist(); toMenu(); });   // the tutorial card's own skip button
 click('guideBtn', () => { resumeAndLock(); startGuide(); });   // explore: replay the explorer's guide
-click('quitBtn', toMenu);
-click('resNext', () => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, true));
-click('resMenu', toMenu);
+click('quitBtn', heavy(toMenu));
+click('resNext', heavy(() => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, true)));
+click('resMenu', heavy(toMenu));
 click('resDouble', async () => {
   if (resDoubled) return;
   const ok = await runAd('rewarded'); lastAdAt = performance.now();
@@ -2122,7 +2135,7 @@ click('reviveBtn', async () => {
   if (ok) revive(); else updAdUI();
 });
 click('retryBtn', () => { bankRunCoins(); playStage(stage.n, true); });
-click('goMenu', toMenu);
+click('goMenu', heavy(toMenu));
 function updAdUI() {
   $('adwait').classList.toggle('hidden', !sdk.adBusy);
   const ok = adsOK();
@@ -2339,7 +2352,7 @@ function startExplore(id, fromTut = false) {   // fromTut: straight after the fi
   trial = null; if (!has(cur)) cur = 'katana';
   for (const id of WIDS) cds[id] = 0;
   for (const d of world.dummies) { d.e = null; d.t = 0; spawnDummy(d); }
-  for (let i = 0; i < npcCap(); i++) spawnNPCNear(10, 75);
+  for (let i = 0; i < 6; i++) spawnNPCNear(10, 75);   // the rest join over the next few seconds (updNPCs), not all in one frame
   state = 'play'; vmMode = 'hand'; tut = null;
   showLayer(null); $('hud').classList.remove('hidden'); $('bossBar').classList.add('hidden'); $('tut').classList.add('hidden'); $('tutBox').classList.add('hidden');
   const m = MAPS[mapIdx(id)];
@@ -2781,7 +2794,7 @@ function blessText() {
 // over a few seconds; storms throw lightning. The sky is re-coloured ten times a second, reflections every few.
 const DAY_LEN = 420, DAY_KEYS = [THEMES_REAL[0], THEMES_REAL[2], DUSK, THEMES_REAL[1]], DAY_NAMES = ['DAWN', 'DAY', 'DUSK', 'NIGHT'];
 const WX_ODDS = { clear: 3, cloudy: 2, rain: 1.4, storm: 0.6, fog: 1 };
-let dayT = 0.2, wx = { from: 'clear', to: 'clear', k: 1, t: 80 }, skyAcc = 0, envAcc = 0, boltT = 5, skyLabel = '';
+let rangeN = 0, dayT = 0.2, wx = { from: 'clear', to: 'clear', k: 1, t: 80 }, skyAcc = 0, envAcc = 0, boltT = 5, skyLabel = '';
 const dayPhase = () => { const seg = (dayT % 1) * 4, i = Math.floor(seg), f = seg - i; return { i, t: f < 0.7 ? 0 : smooth((f - 0.7) / 0.3) }; };
 const isNight = () => { const P = dayPhase(); return P.i === 3 ? P.t < 0.5 : P.i === 2 && P.t > 0.5; };
 const wxName = id => world.particles === 'snow' ? { rain: 'SNOW', storm: 'BLIZZARD' }[id] || WEATHER[id].name.toUpperCase() : WEATHER[id].name.toUpperCase();
@@ -2800,8 +2813,9 @@ function updSky(dt) {
   if ((skyAcc += dt) < 0.1) return; skyAcc = 0;
   const P = dayPhase(), a = WEATHER[wx.from], b = WEATHER[wx.to], k = smooth(wx.k), w = {};
   for (const key of ['cover', 'fogMul', 'dim', 'rain']) w[key] = a[key] + (b[key] - a[key]) * k;
-  const env = (envAcc += 0.1) > 4; if (env) envAcc = 0;
-  world.setSky(DAY_KEYS[P.i], DAY_KEYS[(P.i + 1) % 4], P.t, w, env);
+  const env = (envAcc += 0.1) > 20; if (env) envAcc = 0;   // reflections every 20 s (each refresh costs a frame)
+  rangeN = (rangeN + 1) % 10;
+  world.setSky(DAY_KEYS[P.i], DAY_KEYS[(P.i + 1) % 4], P.t, w, env, env || rangeN === 0);
   const label = `${DAY_NAMES[P.t < 0.5 ? P.i : (P.i + 1) % 4]} · ${wxName(k < 0.5 ? wx.from : wx.to)}`;
   if (label !== skyLabel) { skyLabel = label; exploreTag(); }
 }
@@ -2842,13 +2856,16 @@ function makeCitizen(x, z, role) {
   $('npcTags').appendChild(C.tag); cits.push(e);
   return e;
 }
-function clearCitizens() { for (const e of cits) { scene.remove(e.root); e.cit.tag.remove(); } cits = []; citKey = null; }
+function clearCitizens() { for (const e of cits) { scene.remove(e.root); e.cit.tag.remove(); } cits = []; citKey = null; citQ = []; }
 function spawnCitizens(tw) {
   clearCitizens(); citKey = tw.key;
   const st = tw.stalls[0], bd = tw.board;
-  makeCitizen(st.x + tw.ox, st.z + tw.oz, 'merchant'); makeCitizen(bd.x + tw.ox, bd.z + tw.oz, 'elder');
-  for (let i = 0; i < citN(); i++) { const q = openSpot(tw.x, tw.z, 3, tw.r - 3); if (q) makeCitizen(q.x, q.z, 'walker'); }
-  if (trialRun && trialRun.raid) hideCitizens(true);
+  citQ = [[st.x + tw.ox, st.z + tw.oz, 'merchant'], [bd.x + tw.ox, bd.z + tw.oz, 'elder']];
+  for (let i = 0; i < citN(); i++) { const q = openSpot(tw.x, tw.z, 3, tw.r - 3); if (q) citQ.push([q.x, q.z, 'walker']); }
+}
+let citQ = [];   // townsfolk still to make: two a frame, so walking into town doesn't stall
+function drainCitizens() {
+  for (const [x, z, role] of citQ.splice(0, 2)) { const e = makeCitizen(x, z, role); if (trialRun && trialRun.raid) { e.cit.hidden = true; scene.remove(e.root); } }
 }
 function hideCitizens(on) {   // a raid: everyone takes shelter (and comes back out when it's over)
   for (const e of cits) { e.cit.hidden = on; if (on) { scene.remove(e.root); fx.dust(new V3(e.x, 0.3, e.z), 8, 0.6); } else scene.add(e.root); }
@@ -2856,6 +2873,7 @@ function hideCitizens(on) {   // a raid: everyone takes shelter (and comes back 
 function updCitizens(dt) {
   const tw = townAt(); if (!tw || !tw.stalls) return;
   const d = Math.hypot(player.pos.x - tw.x, player.pos.z - tw.z);
+  if (citQ.length) drainCitizens();
   if (d < 85 && citKey !== tw.key) spawnCitizens(tw); else if (d > 120 && cits.length && !(talkNPC && talkNPC.cit)) clearCitizens();
   const night = isNight(), lines = wx.to === 'storm' ? CIT_LINES.storm : wx.to === 'rain' && wx.k > 0.5 ? CIT_LINES.rain : night ? CIT_LINES.night : CIT_LINES.day;
   for (const e of cits) {
