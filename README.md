@@ -181,6 +181,9 @@ Progression: coins → unlock and upgrade 6 weapons (5 levels each) + Vitality (
 - `data` module for saves (localStorage fallback); the auth listener reloads progress when the account changes
 - Space/arrow keys don't scroll the page, the context menu is disabled, and the game auto-pauses on blur or tab switch
 
+## Window size
+In a small window (the game embedded on the site, not fullscreen), the whole interface scales down with it: menus, panels, the HUD, the minimap, dialogues and the shop guide shrink to as little as 74% (`--ui`, set in `resize()`). Desktop only: touch screens keep their own sizes. In a short window, the tutorial and explorer's guide card moves to the top left under the hearts, so the view ahead stays clear.
+
 ## Store art (covers and preview videos)
 `marketing/` holds the CrazyGames assets, rendered from the game itself:
 - Covers: `cover-landscape-1920x1080.png`, `cover-portrait-800x1200.png`, `cover-square-800x800.png` (the hero mid Sky Storm under the Blood Moon, with the title).

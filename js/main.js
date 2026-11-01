@@ -180,6 +180,9 @@ function applyQuality() {
 function resize() {
   const fixed = REC && QS.get('size') && QS.get('size').split('x').map(Number);   // recording: exactly this many pixels, whatever the window
   vw = fixed ? fixed[0] : innerWidth; vh = fixed ? fixed[1] : innerHeight;
+  // the interface scales down with a small window (the embedded game on the site), down to 74%; touch screens keep theirs
+  uiScale = sdk.touch ? 1 : clamp(Math.min(innerWidth / 1500, innerHeight / 880), 0.74, 1);
+  document.documentElement.style.setProperty('--ui', uiScale.toFixed(3));
   renderer.setPixelRatio(fixed ? 1 : basePR());
   renderer.setSize(vw, vh, false);
   if (composer) composer.setSize(vw, vh);
@@ -191,6 +194,7 @@ function resize() {
   tc.width = vw * dpr; tc.height = vh * dpr; tctx.setTransform(dpr, 0, 0, dpr, 0, 0); tDrawn = true;
 }
 const tctx = $('trail').getContext('2d');
+let uiScale = 1;
 
 /* ============ viewmodel ============ */
 const vm = new THREE.Group(), wPivot = new THREE.Group(), vmArm = new THREE.Group();
@@ -3108,9 +3112,9 @@ function nextTour() {
 }
 function placeTour() {
   const st = TOUR[tourI]; if (!st) return;
-  const card = $('tourCard'), hole = $('tourHole'), el = st.sel && document.querySelector(st.sel);
-  const cw = card.offsetWidth, ch = card.offsetHeight, gap = 14, pad = 6;
-  if (!el) { Object.assign(hole.style, { left: vw / 2 + 'px', top: vh / 2 + 'px', width: '0px', height: '0px' }); card.style.left = (vw - cw) / 2 + 'px'; card.style.top = (vh - ch) / 2 + 'px'; return; }
+  const card = $('tourCard'), hole = $('tourHole'), el = st.sel && document.querySelector(st.sel), z = uiScale;   // the card is scaled (--ui): its left/top are in scaled px
+  const cb = card.getBoundingClientRect(), cw = cb.width, ch = cb.height, gap = 14, pad = 6;
+  if (!el) { Object.assign(hole.style, { left: vw / 2 + 'px', top: vh / 2 + 'px', width: '0px', height: '0px' }); card.style.left = (vw - cw) / 2 / z + 'px'; card.style.top = (vh - ch) / 2 / z + 'px'; return; }
   const r = el.getBoundingClientRect();
   Object.assign(hole.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + pad * 2 + 'px', height: r.height + pad * 2 + 'px' });
   let x, y;
@@ -3118,7 +3122,7 @@ function placeTour() {
   else if (r.left - gap - cw > 8) { x = r.left - gap - cw; y = r.top + r.height / 2 - ch / 2; }
   else if (r.bottom + gap + ch < vh - 8) { x = r.left + r.width / 2 - cw / 2; y = r.bottom + gap; }
   else { x = r.left + r.width / 2 - cw / 2; y = r.top - gap - ch; }
-  card.style.left = clamp(x, 8, vw - cw - 8) + 'px'; card.style.top = clamp(y, 8, vh - ch - 8) + 'px';
+  card.style.left = clamp(x, 8, vw - cw - 8) / z + 'px'; card.style.top = clamp(y, 8, vh - ch - 8) / z + 'px';
 }
 function endTour() {
   $('tour').classList.add('hidden');

@@ -276,6 +276,13 @@ html,body{background:#e9dcc0;color:var(--txt)}
 #mpLabel{min-width:220px;max-width:320px;font-family:"Brush","Segoe UI",system-ui,sans-serif;font-size:18px;color:var(--ink);line-height:1.1}
 #mpLabel small{display:block;font-family:"Segoe UI",system-ui,sans-serif;font-size:10px;letter-spacing:.12em;color:var(--mut);margin-top:3px}
 #exploreBtn:disabled{opacity:.4}
+/* UI scale: in a small window (the site's embed, not fullscreen) the whole interface shrinks with it (--ui, set in
+   resize(); desktop only, touch screens keep their own sizes). Elements placed by script at screen positions (name
+   tags, prompts, floating numbers) are left out. */
+:root{--ui:1}
+#hud .tl,#hud .tc,#hudCoins,#pauseBtn,#camBtn,#tutBox,#minimap,#bossBar,#wBar,#ultBtn,#dashBtn,#jumpBtn,#finishTip,#coinsBadge,#dlg,#lockHint,#banner,#tourCard,.layer>*{zoom:var(--ui)}
+/* a short window: the tutorial / guide card moves to the top left under the hearts, clear of the view ahead */
+@media (max-height:780px) and (hover:hover){#tutBox{left:14px;transform:none;top:110px;width:400px;text-align:left}}
 #exploreBtn.pulse{animation:xpPulse 1.4s ease-in-out infinite;position:relative}
 #exploreBtn.pulse::after{content:"NEW";position:absolute;top:-8px;right:-6px;padding:1px 5px;border-radius:6px;background:#e0302a;color:#fff;font:800 9px/1.4 "Segoe UI",system-ui,sans-serif;letter-spacing:.1em}
 @keyframes xpPulse{0%,100%{box-shadow:0 0 0 0 rgba(242,193,78,.7)}50%{box-shadow:0 0 0 7px rgba(242,193,78,0)}}
