@@ -4,3 +4,4 @@ dist/
 Thumbs.db
 marketing/frames/
 marketing/capture.log
+__pycache__/
