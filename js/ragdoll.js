@@ -48,11 +48,15 @@ function concat(geos) {
 
 export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies are kept inside
   const S = { dolls: [], rigids: [], bleed: [] };
+  // In a fight the arena wall holds bodies in, but only ones that fell inside it: an enemy cut down outside the
+  // wall (at a gate, or vaulting over it) used to be yanked through it to the inside.
+  const insideArena = p => Math.hypot(p.x, p.z) < W.bodyR + 0.6;
   let thudCD = 0;
 
   // ------------------------------------------------------------------ ragdoll
   function newDoll(pts, cons, parts) {
-    const d = { isDoll: true, pts, cons, parts, group: new THREE.Group(), asleep: false, still: 0, merged: null, age: 0, stroke: -1, cuts: 0, pooled: false, sink: 0 };
+    const d = { isDoll: true, pts, cons, parts, group: new THREE.Group(), asleep: false, still: 0, merged: null, age: 0, stroke: -1, cuts: 0, sink: 0 };
+    d.inside = insideArena(pts.reduce((a, p) => a.add(p.p), new V3()).divideScalar(pts.length));
     for (const p of parts) d.group.add(p.mesh);
     scene.add(d.group); S.dolls.push(d);
     placeParts(d);
@@ -149,7 +153,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
         pt.o.x = pt.p.x - (pt.p.x - pt.o.x) * 0.55; pt.o.z = pt.p.z - (pt.p.z - pt.o.z) * 0.55;
         if (pt.o.y < pt.p.y) pt.o.y = pt.p.y;
       }
-      const r = Math.hypot(pt.p.x, pt.p.z), R = W.explore ? 1e9 : W.bodyR + 0.6;
+      const r = Math.hypot(pt.p.x, pt.p.z), R = W.explore || !d.inside ? 1e9 : W.bodyR + 0.6;
       if (r > R) { pt.p.x *= R / r; pt.p.z *= R / r; }
     }
     return move;
@@ -289,6 +293,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     const b = { isDoll: false, group, v: vel, w: ang, sup, I: 0.4 * R * R, asleep: false, still: 0, age: 0, stroke: sid, cuts: 0, sink: 0, landed: false,
       shapes: sh.shapes, pts: sh.pts, m: sh.m, rad: size.length() / 2, rest: false };
     for (const m of group.children) { m.castShadow = m.material !== MATS.glow; m.receiveShadow = true; }
+    b.inside = insideArena(group.position);
     scene.add(group); S.rigids.push(b);
     return b;
   };
@@ -309,7 +314,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       touching = true; minY = Math.min(minY, _pw.y);
       (_gr[n] || (_gr[n] = new V3())).subVectors(_pw, g.position); n++;
       _vp.copy(b.w).cross(_gr[n - 1]).add(b.v);
-      if (_vp.y < -2.5 && !b.landed) { b.landed = true; fx.splat(_pw.x, _pw.z, Math.min(0.5, b.I * 2 + 0.15)); if (thudCD <= 0) { sfx.thud(Math.min(1, -_vp.y / 8)); thudCD = 0.1; } }
+      if (_vp.y < -2.5 && !b.landed) { b.landed = true; if (b.scenery) fx.dust(_pw.clone(), 6, 0.8); if (thudCD <= 0) { sfx.thud(Math.min(1, -_vp.y / 8)); thudCD = 0.1; } }
     }
     for (let it = 0; it < 4; it++) for (let i = 0; i < n; i++) {
       const r = _gr[i];
@@ -331,12 +336,13 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     if (b.rest) touching = true; b.rest = false;   // lying on another piece counts as resting too
     b.support = touching;   // supported (by the ground or a supported piece): solid for whatever lands on it
     if (touching) b.w.multiplyScalar(0.985);
-    const r = Math.hypot(g.position.x, g.position.z), Rw = W.explore ? 1e9 : W.bodyR + 0.6;
+    const r = Math.hypot(g.position.x, g.position.z), Rw = W.explore || !b.inside ? 1e9 : W.bodyR + 0.6;
     if (r > Rw) { g.position.x *= Rw / r; g.position.z *= Rw / r; b.v.x *= -0.3; b.v.z *= -0.3; }
     if (touching && b.v.lengthSq() < 0.02 && b.w.lengthSq() < 0.05) { b.still += dt; if (b.still > 0.4) b.asleep = true; } else b.still = 0;
   }
   function removeRigid(b) { scene.remove(b.group); disposeChunk(b.group); S.rigids.splice(S.rigids.indexOf(b), 1); }
   function cutRigid(b, plane, push, sid) {
+    if (b.group.userData.size < 0.3) return null;   // crumbs don't split further
     const res = sliceChunk(b.group, plane);
     if (!res) return null;
     // the halves keep the rotation of the whole, so the cut plane's local normal is the same for both: adding it to
@@ -350,7 +356,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       const sd = i === 0 ? 1 : -1;
       const v = b.v.clone().multiplyScalar(0.5).addScaledVector(plane.normal, sd * rnd(1, 2.2) * k).addScaledVector(push, rnd(1, 2.5) * k).add(new V3(0, rnd(1, 2.5) * k, 0));
       const nb = S.addRigid(g, v, new V3().randomDirection().multiplyScalar(rnd(3, 8) * k), sid);
-      nb.cuts = b.cuts + 1;
+      nb.cuts = b.cuts + 1; nb.scenery = b.scenery;
       return nb;
     });
   }
@@ -372,10 +378,10 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       // contact points: the hull's corners above, plus points spread over the surface (about every half metre),
       // so a face resting on a face or an edge crossing an edge is felt too, not just corners
       const surf = [], A = new V3(), B = new V3(), C = new V3();
-      const step = 9 * Math.max(1, Math.ceil(P.length / 9 / 150));   // big meshes: a spread of ~150 triangles is plenty
+      const step = 9 * Math.max(1, Math.ceil(P.length / 9 / 60));   // big meshes: a spread of ~60 triangles is plenty
       for (let i = 0; i + 8 < P.length; i += step) {
         A.fromArray(P, i); B.fromArray(P, i + 3); C.fromArray(P, i + 6);
-        const n = Math.min(6, Math.ceil(Math.max(A.distanceTo(B), B.distanceTo(C), C.distanceTo(A)) / 0.5));
+        const n = Math.min(4, Math.ceil(Math.max(A.distanceTo(B), B.distanceTo(C), C.distanceTo(A)) / 0.5));
         for (let a = 0; a <= n; a++) for (let b = 0; a + b <= n; b++) { const u = a / n, v = b / n; surf.push(new V3().addScaledVector(A, 1 - u - v).addScaledVector(B, u).addScaledVector(C, v)); }
       }
       const seen = new Set();
@@ -407,7 +413,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     _hit.depth = best; return best > 0;
   }
   const _iq = new THREE.Quaternion(), _mv = new V3(), _pw2 = new V3(), _ql = new V3(), _n = new V3(), _ra = new V3(), _rb = new V3(), _vr = new V3(), _x = new V3(), _y = new V3(), _tg = new V3(), _ib = new THREE.Matrix4();
-  const SLOP = 0.005, E = 0.1, MU = 0.6, MAX_PTS = 320;
+  const SLOP = 0.005, E = 0.1, MU = 0.6, MAX_PTS = 64, MAX_CONTACTS = 24;
   // A's points against B's hulls (the normal points out of B). All the contacts are found first and then solved
   // together a few times over, so a face landing on a face shares the load evenly instead of the first points
   // taking it all (which set pieces spinning); the overlap is then fixed once, by the deepest contact.
@@ -422,6 +428,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       _vr.copy(A.w).cross(_ra).add(A.v).sub(_x.copy(B.w).cross(_rb).add(B.v));
       _mv.copy(_vr).applyQuaternion(_iq).multiplyScalar(dt);
       if (!inside(B.shapes, _ql, 0, _mv) || _hit.depth < SLOP) continue;
+      if (nc >= MAX_CONTACTS) break;
       const c = _cs[nc] || (_cs[nc] = { ra: new V3(), rb: new V3(), n: new V3(), depth: 0 }); nc++;
       c.ra.copy(_ra); c.rb.copy(_rb); c.n.copy(_hit.n).applyQuaternion(B.group.quaternion); c.depth = _hit.depth;
       if (deep < 0 || c.depth > _cs[deep].depth) deep = nc - 1;
@@ -459,10 +466,11 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     if (up > 0.3) A.rest = true; else if (up < -0.3) B.rest = true;   // the one on top is resting on the other
   }
   function collideBodies(dt) {
-    const L = S.rigids.filter(b => !b.sink);
-    for (const b of L) b.group.updateMatrixWorld();
-    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
-      const A = L[i], B = L[j]; if (A.asleep && B.asleep) continue;
+    const L = S.rigids.filter(b => !b.sink).sort((a, b) => a.group.position.x - b.group.position.x);
+    let maxR = 0; for (const b of L) { b.group.updateMatrixWorld(); maxR = Math.max(maxR, b.rad); }
+    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {   // sorted by x: stop once B is out of reach
+      const A = L[i], B = L[j]; if (B.group.position.x - A.group.position.x > A.rad + maxR) break;
+      if (A.asleep && B.asleep) continue;
       const rr = A.rad + B.rad; if (A.group.position.distanceToSquared(B.group.position) > rr * rr) continue;
       contacts(A, B, dt); contacts(B, A, dt);
     }
@@ -510,7 +518,7 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     S.bleed = [];
   };
   let acc = 0;
-  const MAX_DOLLS = 34, MAX_RIGIDS = 60;
+  const MAX_DOLLS = 34, MAX_RIGIDS = 60, MAX_SCENERY = 80;
   S.update = (dt) => {
     thudCD -= dt;
     acc = Math.min(acc + dt, H * 4);   // under ~30 fps let ragdolls run slow rather than pile up substeps (spiral of lag)
@@ -526,13 +534,15 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
       placeParts(d);
       if (steps && (moves.get(d) || 0) < 0.0012) { d.still += dt; if (d.still > 0.6) {
         d.asleep = true; merge(d);
-        if (!d.pooled) { d.pooled = true; const c = d.pts.reduce((s, p) => s.add(p.p), new V3()).divideScalar(d.pts.length); fx.splat(c.x, c.z, Math.min(0.95, 0.25 + d.parts.length * 0.04)); }
       } } else d.still = 0;
     }
     for (const b of S.rigids.slice()) {
       b.age += dt;
       if (b.sink > 0) { b.sink += dt * (b.poof ? 4 : 1); b.group.position.y -= dt * 0.35 * (b.poof ? 4 : 1); if (b.sink > 2.2) removeRigid(b); continue; }
       if (!b.asleep) stepRigid(b, dt);
+      // settled scenery: small pieces stop casting shadows (a shadow pass each), and crumbs sink away after a while
+      else if (b.scenery && !b.settled) { b.settled = true; if (b.rad < 1.2) for (const m of b.group.children) m.castShadow = false; }
+      if (b.scenery && b.asleep && b.rad < 0.45 && b.age > 6) b.sink = 0.001;
     }
     if (dt > 0) collideBodies(dt);
     // severed stumps keep pumping for a moment
@@ -543,10 +553,11 @@ export function makePhysics(scene, fx, sfx, W) {   // W.bodyR: the radius bodies
     }
     // keep the battlefield readable: the oldest bodies sink away, but only once they have settled on the ground
     const sinkOld = (list, max) => { const live = list.filter(x => !x.sink); if (live.length <= max) return; const ok = live.filter(x => x.asleep || x.age > 8).sort((a, b) => b.age - a.age); for (const x of ok.slice(0, live.length - max)) { if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); } x.sink = 0.001; } };
-    sinkOld(S.dolls, MAX_DOLLS); sinkOld(S.rigids, MAX_RIGIDS);
+    // cut scenery is the world, not a corpse: it stays where it fell (a generous cap only guards the frame rate)
+    sinkOld(S.dolls, MAX_DOLLS); sinkOld(S.rigids.filter(b => !b.scenery), MAX_RIGIDS); sinkOld(S.rigids.filter(b => b.scenery), MAX_SCENERY);
     // family mode (Blood off): nothing lies around - once a body has settled it vanishes in a puff of ink smoke
     if (!fx.blood) for (const x of [...S.dolls, ...S.rigids]) {
-      if (x.sink || x.age < 2.5 || !(x.asleep || x.age > 5)) continue;
+      if (x.sink || x.scenery || x.age < 2.5 || !(x.asleep || x.age > 5)) continue;
       if (x.isDoll && !x.asleep) { x.asleep = true; merge(x); }
       const c = x.isDoll ? x.pts.reduce((s, p) => s.add(p.p), new V3()).divideScalar(x.pts.length) : x.group.position;
       fx.dust(c, 10, 0.7); x.sink = 0.001; x.poof = true;

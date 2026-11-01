@@ -1,4 +1,4 @@
-// Pooled particle effects: blood/ink droplets, ground splats, sparks, slash flashes.
+// Pooled particle effects: blood droplets, sparks, dust, slash flashes. Blood never splatters or pools on the floor.
 import * as THREE from 'three';
 
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -16,14 +16,8 @@ function pool(scene, geo, mat, n) {
 }
 function take(P) { const it = P.items[P.next]; const i = P.next; P.next = (P.next + 1) % P.items.length; it.i = i; return it; }
 
-// ink textures drawn once: a splatter blot and a dry-brush stroke
+// a dry-brush stroke texture, drawn once
 function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; }
-const blotTex = () => canvasTex(128, 128, (g, w) => {
-  g.fillStyle = '#fff';
-  for (let i = 0; i < 9; i++) { g.beginPath(); g.arc(w / 2 + rnd(-14, 14), w / 2 + rnd(-14, 14), rnd(14, 30), 0, 7); g.fill(); }
-  for (let i = 0; i < 22; i++) { const a = rnd(0, 7), r = rnd(36, 60); g.beginPath(); g.arc(w / 2 + Math.cos(a) * r, w / 2 + Math.sin(a) * r, rnd(1.5, 5), 0, 7); g.fill(); }
-  for (let i = 0; i < 6; i++) { const a = rnd(0, 7); g.save(); g.translate(w / 2, w / 2); g.rotate(a); g.beginPath(); g.ellipse(34, 0, 16, 3, 0, 0, 7); g.fill(); g.restore(); }
-});
 const brushTex = () => canvasTex(512, 64, (g, w, h) => {
   for (let i = 0; i < 70; i++) {           // dry-brush bristle streaks inside a tapered stroke
     const y = h / 2 + rnd(-1, 1) * h * 0.42, x0 = rnd(0, w * 0.15), x1 = w - rnd(0, w * 0.2);
@@ -34,9 +28,6 @@ const brushTex = () => canvasTex(512, 64, (g, w, h) => {
 
 export function makeFX(scene) {
   const drops = pool(scene, new THREE.TetrahedronGeometry(0.05), new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.1 }), 600);
-  const splats = pool(scene, new THREE.PlaneGeometry(1.25, 1.25).rotateX(-Math.PI / 2),
-    new THREE.MeshStandardMaterial({ map: blotTex(), alphaTest: 0.35, depthWrite: false, roughness: 0.35, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6, transparent: true, opacity: 0.92 }), 90);
-  splats.im.receiveShadow = true;
   const dust = pool(scene, new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0x5e554c, roughness: 1, transparent: true, opacity: 0.32, depthWrite: false }), 120);
   const sparks = pool(scene, new THREE.BoxGeometry(0.018, 0.018, 0.16), new THREE.MeshBasicMaterial({ toneMapped: false }), 260);
   const flashGeo = new THREE.PlaneGeometry(1, 1), brush = brushTex();
@@ -81,13 +72,6 @@ export function makeFX(scene) {
       it.life = rnd(0.4, 0.75); it.max = it.life; it.s = rnd(0.12, 0.22) * radius;
     }
   };
-  F.splat = (x, z, size) => {
-    if (!F.blood) return;   // no pools in family mode
-    const it = take(splats);
-    it.x = x; it.z = z; it.s = size * rnd(0.6, 1.3); it.life = 14; it.r = rnd(0, 6); it.sx = rnd(0.7, 1.3);
-    splats.im.setColorAt(it.i, _c.set(F.blood ? 0x5a0408 : 0x0d0a16));
-    splats.im.instanceColor.needsUpdate = true;
-  };
   F.sparks = (pos, count, color = 0xffc870, speed = 7) => {
     for (let k = 0; k < count; k++) {
       const it = take(sparks);
@@ -113,21 +97,13 @@ export function makeFX(scene) {
     for (const it of drops.items) {
       if (it.life <= 0) continue;
       it.life -= dt; it.v.y -= 16 * dt; it.p.addScaledVector(it.v, dt);
-      if (it.p.y < 0.02) { if (Math.random() < 0.12) F.splat(it.p.x, it.p.z, rnd(0.15, 0.4)); it.life = 0; }
+      if (it.p.y < 0.02) it.life = 0;   // droplets vanish as they reach the floor: no stains
       if (it.life <= 0) { drops.im.setMatrixAt(it.i, ZERO); continue; }
       it.rot += dt * 8;
       _q.setFromAxisAngle(Z, it.rot);
       drops.im.setMatrixAt(it.i, _m.compose(it.p, _q, _s.setScalar(it.s * Math.min(1, it.life * 3))));
     }
     drops.im.instanceMatrix.needsUpdate = true;
-    for (const it of splats.items) {
-      if (it.life <= 0) continue;
-      it.life -= dt;
-      const k = it.life <= 0 ? 0 : Math.min(1, it.life / 3) * it.s * Math.min(1, (14 - it.life) * 12 + 0.2);
-      _q.setFromAxisAngle(UP, it.r);
-      splats.im.setMatrixAt(it.i, it.life <= 0 ? ZERO : _m.compose(_p.set(it.x, 0.02, it.z), _q, _s.set(k * it.sx, 1, k)));
-    }
-    splats.im.instanceMatrix.needsUpdate = true;
     for (const it of dust.items) {
       if (it.life <= 0) continue;
       it.life -= dt; it.v.multiplyScalar(1 - dt * 3.5); it.p.addScaledVector(it.v, dt);

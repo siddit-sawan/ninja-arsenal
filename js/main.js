@@ -5,11 +5,12 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { sdk, initSDK, loadingStart, loadingStop, happytime, gameplay, loadData, saveData, clearData, adsOK, runAd } from './sdk.js';
 import { audio, sfx, music } from './audio.js';
-import { CAP, batchParts, chunkFrom } from './slicer.js';
+import { CAP, batchParts, chunkFrom, MATS } from './slicer.js';
+import { ClothTail } from './cloth.js';
 import { loadBody, cloneChar, RIG, cutMarks, MARK_MAT } from './body.js';
 import { makePhysics } from './ragdoll.js';
-import { buildEnemy, buildPlayer, setModelStyle, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, sickle } from './models.js';
-import { buildWorld, MAPS, THEMES_INK, THEMES_REAL } from './world.js';
+import { buildEnemy, buildPlayer, enemyStar, WEAPON_MODELS, weaponIconSVG, shurikenMesh, kunaiMesh, horokuMesh, sickle } from './models.js';
+import { buildWorld, MAPS, THEMES_REAL, DUSK, WEATHER } from './world.js';
 import { makeFX } from './fx.js';
 
 const $ = id => document.getElementById(id);
@@ -32,10 +33,18 @@ const CHARS = [
   { id: 'raiden', name: 'RAIDEN', title: 'Oni Mask', cost: 3200, perk: 'Blade Storm charges 30% faster.', speed: 1, dash: 1, hearts: 0, ult: 1.3 },
 ];
 const CH = () => CHARS.find(c => c.id === save.char) || CHARS[0];
+// Charm blessings: every charm found in explore mode (all maps together) counts toward permanent blessings.
+const BLESSINGS = [
+  { n: 3, t: '+1 heart' }, { n: 8, t: 'Storm charges 15% faster' }, { n: 14, t: '+15% coins from every run' },
+  { n: 20, t: 'Stages start with the Storm gauge half full' }, { n: 28, t: '+1 more heart' }, { n: 40, t: 'Dash recharges 25% faster' }];
+const charmCount = () => Object.values(save.charms || {}).reduce((a, l) => a + l.length, 0);
+const blessed = n => charmCount() >= n;
+const heartsMax = () => 5 + save.hearts + CH().hearts + (blessed(3) ? 1 : 0) + (blessed(28) ? 1 : 0);
+const ultRate = () => CH().ult * (blessed(8) ? 1.15 : 1);
 
-const WIDS = ['katana', 'shuriken', 'kunai', 'kusarigama', 'naginata'];
-const defSave = () => ({ coins: 0, stage: 1, sel: 1, w: { katana: 1, shuriken: 0, kunai: 0, kusarigama: 0, naginata: 0 }, cur: 'katana', hearts: 0,
-  sfx: true, mus: true, q: null, blood: false, family: 1, style: 'real', map: 'auto', charms: {}, tut: false, best: 0, cam: 'tp', tutDone: false, shopTour: false, char: 'kage', chars: { kage: true } });
+const WIDS = ['katana', 'shuriken', 'kunai', 'kusarigama', 'naginata', 'horoku'];
+const defSave = () => ({ coins: 0, stage: 1, sel: 1, w: { katana: 1, shuriken: 0, kunai: 0, kusarigama: 0, naginata: 0, horoku: 0 }, cur: 'katana', hearts: 0,
+  sfx: true, mus: true, q: null, blood: false, family: 1, map: 'auto', charms: {}, tut: false, best: 0, cam: 'tp', tutDone: false, exGuide: false, shopTour: false, char: 'kage', chars: { kage: true } });
 let save = defSave();
 function loadSave() {
   try {
@@ -64,8 +73,11 @@ const WEAP = {
   naginata: { name: 'Naginata', mode: 'sweep', cost: 2200, color: '#ffb27a', flash: 0xffc89a,
     desc: 'One huge sweep per swipe that cleaves every enemy along the line, edge to edge of the screen.',
     range: l => 10 + l * 1.2, dmg: l => 2 + Math.floor((l + 1) / 2), cd: l => 0.85 - l * 0.07, up: [800, 1500, 2500, 4000] },
+  horoku: { name: 'Hōroku Bomb', mode: 'throw', cost: 3000, color: '#ffb35a', flash: 0xffb35a,
+    desc: 'Lob a clay bomb where you tap. It bursts on impact and cuts apart everything caught in the blast.',
+    range: () => 30, dmg: l => 2 + Math.floor(l / 2), cd: l => 1.7 - l * 0.15, radius: l => 2.6 + l * 0.4, count: () => 1, pierce: () => 1, up: [1200, 2000, 3200, 4800] },
 };
-const HEART_UP = [400, 900, 1600, 2600];
+const HEART_UP = [400, 900, 1600, 2600, 3800, 5200, 7000, 9500];   // Vitality: 8 levels, +1 heart each
 let trial = null;   // weapon unlocked for one stage by a rewarded ad
 const lvl = id => save.w[id] || (trial === id ? 1 : 0);
 const has = id => lvl(id) > 0;
@@ -79,6 +91,10 @@ const EDEF = {
   brute: { hp: 2, speed: 1.9, value: 14, h: 2.4, w: 0.55, reach: 2.0, wind: 1.0, heavy: true },
   assassin: { hp: 1, speed: 4.4, value: 12, h: 1.72, w: 0.34, wind: 0.5, blink: true },
   shade: { hp: 1, speed: 3.8, value: 3, h: 1.6, w: 0.32, wind: 0.6 },
+  citizen0: { hp: 1, speed: 1.2, value: 0, h: 1.85, w: 0.36, civ: true },
+  citizen1: { hp: 1, speed: 1.2, value: 0, h: 1.85, w: 0.36, civ: true },
+  citizen2: { hp: 1, speed: 1.2, value: 0, h: 1.85, w: 0.36, civ: true },
+  citizen3: { hp: 1, speed: 1.2, value: 0, h: 1.85, w: 0.36, civ: true },
   oni: { hp: 30, speed: 1.3, value: 150, h: 4.3, w: 1.0, boss: true, dmg: 2, name: 'ONI WARLORD', slain: 'ONI SLAIN' },
   shogun: { hp: 34, speed: 1.7, value: 220, h: 3.0, w: 0.75, boss: true, dmg: 2, reach: 2.6, name: 'SHOGUN GENERAL', slain: 'SHOGUN FALLS' },
   shadow: { hp: 26, speed: 2.6, value: 240, h: 2.55, w: 0.5, boss: true, dmg: 1, reach: 2.0, wind: 0.6, name: 'SHADOW MASTER', slain: 'SHADOW BANISHED' },
@@ -99,7 +115,7 @@ let vw = innerWidth, vh = innerHeight;
 function setupRenderer() {
   renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: quality === 'high', powerPreference: 'high-performance' });   // LOW skips multisampling (costly at 1080p on integrated graphics)
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.NeutralToneMapping;   // keeps the paper and ink colours true
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   scene = new THREE.Scene();
@@ -176,10 +192,10 @@ const tctx = $('trail').getContext('2d');
 /* ============ viewmodel ============ */
 const vm = new THREE.Group(), wPivot = new THREE.Group(), vmArm = new THREE.Group();
 const vmW = {};
-const VM_BASE = { katana: [0.36, -0.4, -0.6], shuriken: [0.27, -0.2, -0.62], kunai: [0.28, -0.24, -0.6], kusarigama: [0.32, -0.34, -0.58], naginata: [0.42, -0.5, -0.72] };
-const VM_DIR = { katana: [0.05, 0.8, -1], shuriken: [0.12, 1, 0.08], kunai: [-0.35, 1, -0.35], kusarigama: [-0.3, 1, -0.6], naginata: [-0.45, 0.8, -1] };
-const DISPLAY_Z = { katana: -1.5, shuriken: -0.5, kunai: -0.55, kusarigama: -0.85, naginata: -2.1 };
-const DISPLAY_Y = { katana: -0.42, shuriken: 0, kunai: 0, kusarigama: -0.08, naginata: -0.25 };
+const VM_BASE = { katana: [0.36, -0.4, -0.6], shuriken: [0.27, -0.2, -0.62], kunai: [0.28, -0.24, -0.6], kusarigama: [0.32, -0.34, -0.58], naginata: [0.42, -0.5, -0.72], horoku: [0.27, -0.22, -0.6] };
+const VM_DIR = { katana: [0.05, 0.8, -1], shuriken: [0.12, 1, 0.08], kunai: [-0.35, 1, -0.35], kusarigama: [-0.3, 1, -0.6], naginata: [-0.45, 0.8, -1], horoku: [0, 1, 0] };
+const DISPLAY_Z = { katana: -1.5, shuriken: -0.5, kunai: -0.55, kusarigama: -0.85, naginata: -2.1, horoku: -0.5 };
+const DISPLAY_Y = { katana: -0.42, shuriken: 0, kunai: 0, kusarigama: -0.08, naginata: -0.25, horoku: 0 };
 const swing = { on: false, t: 0, dur: 0.16, d: new V3(1, 0, 0) };
 let jab = 0, vmMode = 'hand', displayId = 'katana', drawT = -9;
 
@@ -244,7 +260,7 @@ function updateVM(dt, t) {
 let state = 'loading', cur = 'katana';
 let stage = null, enemies = [], pProj = [], eProj = [], timers = [];
 let hearts = 5, maxHearts = 5, score = 0, runCoins = 0, comboN = 0, comboT = 0, ult = 0, invuln = 0;
-let stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
+let stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0, counters: 0, perfect: 0, clean: 0 };
 let spawnT = 0, killedCounted = 0, revived = false, bossE = null, shake = 0, timeScale = 1, slowT = 0, slowTo = 1, strokeKills = new Map();
 const cds = {}; WIDS.forEach(id => cds[id] = 0);
 let lastCoins = 0, resDoubled = false, adsWatchedThisRun = 0, playsSinceAd = 0, lastAdAt = performance.now();
@@ -263,7 +279,7 @@ const ROSTER = [
 ];
 const BOSSES = ['oni', 'shogun', 'shadow'];   // every 5th stage, in rotation
 // Maps: stages rotate through them (map i opens once you reach stage i + 1); the menu can pin one instead
-const themeName = i => (save.style === 'ink' ? THEMES_INK : THEMES_REAL)[i].name;
+const themeName = i => THEMES_REAL[i].name;
 const mapIdx = id => MAPS.findIndex(m => m.id === id);
 const mapOpen = id => save.stage >= mapIdx(id) + 1;
 const autoMap = n => MAPS[(n - 1 + Math.floor(n / 5)) % MAPS.length].id;
@@ -271,7 +287,7 @@ const stageMap = n => save.map !== 'auto' && mapOpen(save.map) ? save.map : auto
 const EXPLORE_THEME = { shrine: 2, bamboo: 0, village: 2, snow: 2, castle: 0 };
 function makeStage(n) {
   const boss = n % 5 === 0;
-  const total = Math.min(Math.round(12 + n * 3.2 + n * n * 0.06), 110) - (boss ? 4 : 0);
+  const total = Math.min(Math.round(12 + n * 3.2 + n * n * 0.09), 170) - (boss ? 4 : 0);
   const open = ROSTER.filter(r => n >= r.from), debut = ROSTER.find(r => r.from === n && n > 1);
   // every unlocked type is guaranteed a share of the stage (growing with the stage); the rest is a weighted draw
   const kinds = [];
@@ -286,12 +302,21 @@ function makeStage(n) {
   if (debut) {   // a newcomer shows up early (3rd and 6th spawn), so it gets introduced before the crowd builds
     for (const at of [2, 5]) { const j = kinds.indexOf(debut.kind, at); if (j > at) [kinds[at], kinds[j]] = [kinds[j], kinds[at]]; }
   }
-  const q = kinds.map(kind => ({ kind, gap: Math.max(0.35, 2.1 - n * 0.07) * rnd(0.55, 1.35) * (Math.random() < 0.18 + n * 0.01 ? 0.15 : 1) }));
+  const q = kinds.map(kind => ({ kind, gap: Math.max(0.25, 2.1 - n * 0.07) * rnd(0.55, 1.35) * (Math.random() < 0.18 + n * 0.01 ? 0.15 : 1) }));
   if (boss) q.push({ kind: BOSSES[(n / 5 - 1) % BOSSES.length], gap: 2 });
-  return { n, boss, queue: q, total: q.length, debut: debut && debut.kind, theme: boss ? 3 : (n - 1) % 3, speedMul: Math.min(1.6, 1 + 0.025 * (n - 1)) };
+  return { n, boss, queue: q, total: q.length, debut: debut && debut.kind, theme: boss ? 3 : (n - 1) % 3, speedMul: Math.min(2, 1 + 0.03 * (n - 1)), ...difficulty(n) };
+}
+// Mid and end game get much harder: from stage 6 `hard` climbs to 1 by stage 30 (and on to 1.4 at 40). It shortens
+// wind-ups and the pauses between attacks (pace), toughens enemies (armoured and heavy ones gain hit points, light
+// ones may be veterans with two), makes heavy, armoured and boss blows cost an extra heart from stage 18, and bosses
+// get far more health.
+function difficulty(n) {
+  const hard = clamp((n - 6) / 24, 0, 1.4);
+  return { hard, pace: Math.max(0.5, 1 - 0.36 * hard), dmgUp: n >= 18 };
 }
 
 const templates = {};
+const blow = d => (d.dmg || 1) + (stage.dmgUp && (d.heavy || d.armor || d.boss) ? 1 : 0);   // hearts a melee hit costs
 function spawnEnemy(kind, x, z, minion = false, gate = null) {
   const d = EDEF[kind];
   const root = cloneChar(templates[kind]);
@@ -299,7 +324,9 @@ function spawnEnemy(kind, x, z, minion = false, gate = null) {
   root.traverse(o => { if (o.isMesh) o.castShadow = true; });
   const e = { kind, d, root, P, hp: d.hp, maxHp: d.hp, x, z, speed: d.speed * stage.speedMul * rnd(0.9, 1.1), state: 'run', t: 0, ph: rnd(0, 6), atkT: 0,
     stagger: 0, s: root.scale.x, minion, holdR: rnd(9, 14), lastStroke: -1, sumT: 6, gate, y: 0, air: null, leapCD: rnd(1.5, 4) };
-  if (d.boss) { e.hp = e.maxHp = d.hp + 8 * (stage.n / 5 - 1); e.blinkT = rnd(3, 4); bossE = e; $('bossName').textContent = d.name; $('bossBar').classList.remove('hidden'); updBoss(); banner(d.name, 'BOSS'); sfx.roar(); music('boss'); shake = 0.6; }
+  const H = stage.hard || 0;
+  if (!d.boss && H > 0) { e.hp = e.maxHp = d.hp + (d.armor || d.heavy ? Math.floor(H * 2) : Math.random() < H * 0.35 ? 1 : 0); }   // tougher foes later on
+  if (d.boss) { e.hp = e.maxHp = d.hp + (8 + 8 * H) * (stage.n / 5 - 1); e.blinkT = rnd(3, 4); bossE = e; $('bossName').textContent = d.name; $('bossBar').classList.remove('hidden'); updBoss(); banner(d.name, 'BOSS'); sfx.roar(); music('boss'); shake = 0.6; }
   root.position.set(x, 0, z); root.rotation.y = Math.atan2(-x, -z);
   scene.add(root); enemies.push(e);
   return e;
@@ -326,7 +353,7 @@ function animEnemy(e, dt) {
   const tw = (o, ax, v, kk = k) => { o.rotation[ax] += (v - o.rotation[ax]) * kk; };
   const land = e.landT > 0 ? e.landT / 0.25 : 0; e.landT = Math.max(0, (e.landT || 0) - dt);   // crouch after a leap
   if (e.stagger > 0) {   // whiplash: snapped back hard, then recovering as the stagger runs out
-    const a = e.stagger / (e.d.boss ? 0.18 : 0.32);
+    const a = e.stagger / 0.32;
     rotTo(P.hips, -0.45 * a, k); rotTo(P.head, -0.45 * a, k); rotTo(P.armL, 0.7 * a, k); rotTo(P.armR, 0.5 * a, k); rotTo(P.elbowL, -0.3, k);
     rotTo(P.legL, 0.3 * a, k); rotTo(P.legR, -0.25 * a, k); rotTo(P.kneeR, 0.5 * a, k);
     tw(P.torso, 'y', Math.sin(e.t * 28) * 0.18 * a); tw(P.hips, 'z', Math.sin(e.t * 17) * 0.08 * a);
@@ -377,7 +404,7 @@ function shadowStep(e) {
   const R = Math.hypot(x, z), M = world.arenaR - 1.5; if (R > M && !stage.explore) { x *= M / R; z *= M / R; }
   e.x = x; e.z = z; e.gate = null; e.root.rotation.y = Math.atan2(player.pos.x - x, player.pos.z - z);
   fx.dust(new V3(x, 0, z), 18, 1.3 * e.s);
-  e.state = 'windup'; e.t = 0; e.windDur = e.d.wind ?? 0.6; sfx.warn(); floater('!', headPos(e), 'warn');
+  e.state = 'windup'; e.t = 0; e.windDur = Math.max(0.3, (e.d.wind ?? 0.6) * (stage.pace ?? 1)); sfx.warn(); floater('!', headPos(e), 'warn');
 }
 function chargeWind(e, dx, dz) {
   e.state = 'chargeWind'; e.t = 0; e.cdx = dx; e.cdz = dz;
@@ -400,7 +427,7 @@ function updEnemies(dt) {
       if (t >= 1) {
         e.air = null; e.y = 0; e.gate = null; e.P.hips.rotation.x = 0; e.landT = 0.25;
         fx.dust(new V3(e.x, 0, e.z), 10, e.s); sfx.thud(0.35);
-        if (A.attack) { e.state = 'windup'; e.t = 0; e.windDur = 0.42; sfx.warn(); floater('!', headPos(e), 'warn'); }
+        if (A.attack) { e.state = 'windup'; e.t = 0; e.windDur = Math.max(0.3, 0.42 * (stage.pace ?? 1)); sfx.warn(); floater('!', headPos(e), 'warn'); }
       }
       animEnemy(e, dt); e.root.position.set(e.x, e.y, e.z);
       continue;
@@ -412,7 +439,7 @@ function updEnemies(dt) {
       let tx = px, tz = pz;
       if (e.gate) { tx = e.gate.x; tz = e.gate.z; if (Math.hypot(tx - e.x, tz - e.z) < 1.5) e.gate = null; }
       let mx = tx - e.x, mz = tz - e.z; const ml = Math.hypot(mx, mz) || 1; mx /= ml; mz /= ml;
-      if (!e.gate && dist <= reachOf(e)) { e.state = d.ranged ? 'aim' : 'ready'; e.t = 0; e.atkT = d.ranged ? rnd(0.5, 1.2) : rnd(0.2, 0.5); }
+      if (!e.gate && dist <= reachOf(e)) { e.state = d.ranged ? 'aim' : 'ready'; e.t = 0; e.atkT = (d.ranged ? rnd(0.5, 1.2) : rnd(0.2, 0.5)) * (stage.pace ?? 1); }
       else {
         if (e.kind === 'runner' && !e.gate && dist > 4) { const w = Math.sin(e.t * 2.6 + e.ph) * 0.7; const ax = mx - mz * w, az = mz + mx * w, al = Math.hypot(ax, az); mx = ax / al; mz = az / al; }
         e.x += mx * e.speed * dt; e.z += mz * e.speed * dt;
@@ -438,13 +465,15 @@ function updEnemies(dt) {
         if (e.atkT <= 0) {
           e.t = 0;
           if (e.state === 'aim') e.state = 'throw';
-          else { e.state = 'windup'; e.windDur = e.npc ? Math.max(0.26, 0.5 - 0.05 * e.npc.rank) : d.wind ?? (d.boss ? 1.0 : 0.72); sfx.warn(); floater('!', headPos(e), 'warn'); }
+          else { e.state = 'windup'; e.windDur = e.npc ? Math.max(0.26, 0.5 - 0.05 * e.npc.rank) : Math.max(0.3, (d.wind ?? (d.boss ? 1.0 : 0.72)) * (stage.pace ?? 1)); sfx.warn(); floater('!', headPos(e), 'warn'); }
         }
       } else if (e.state === 'windup') {
         if (e.t >= e.windDur) {
           e.state = 'recover'; e.t = 0; sfx.swish(0.6);
           if (d.boss || d.heavy) { shake = Math.max(shake, d.boss ? 0.8 : 0.5); sfx.thud(d.boss ? 2 : 1.2); if (d.heavy) fx.dust(new V3(e.x + dx * 1.4, 0, e.z + dz * 1.4), 14, 1.2); }
-          if (dist <= reachOf(e) + 0.75 && player.dashT <= 0 && player.y < 0.9) hurtPlayer(e.npc ? (e.npc.rank >= 4 ? 2 : 1) : d.dmg || 1);
+          const inReach = dist <= reachOf(e) + 0.75;
+          if (inReach && player.dashT <= 0 && player.y < 0.9) hurtPlayer(e.npc ? (e.npc.rank >= 4 ? 2 : 1) : blow(d));
+          else if (inReach && T - Math.max(player.dashAt ?? -9, player.jumpAt ?? -9) < PERFECT_WIN) perfectDodge(e);   // dashed or jumped at the last moment
           else { floater('DODGED', headPos(e), ''); if (tut) tut.flags.dodge = true; }
         }
       } else if (e.state === 'chargeWind') {
@@ -452,12 +481,12 @@ function updEnemies(dt) {
       } else if (e.state === 'charging') {   // a straight, unstoppable rush along the telegraphed line
         e.x += e.cdx * 15 * dt; e.z += e.cdz * 15 * dt;
         if (Math.random() < dt * 30) fx.dust(new V3(e.x, 0, e.z), 2, 0.8);
-        if (!e.hitDone && dist < d.w + PLAYER_R + 0.6) { e.hitDone = true; if (player.dashT <= 0 && player.y < 0.9) hurtPlayer(d.dmg || 1); else floater('DODGED', headPos(e), ''); }
+        if (!e.hitDone && dist < d.w + PLAYER_R + 0.6) { e.hitDone = true; if (player.dashT <= 0 && player.y < 0.9) hurtPlayer(blow(d)); else floater('DODGED', headPos(e), ''); }
         if (e.t >= 0.55) { e.state = 'recover'; e.t = 0; if (!e.hitDone && tut) tut.flags.dodge = true; }
       } else if (e.state === 'recover') {
-        if (e.t >= (e.npc ? 0.3 : 0.45)) { e.state = 'ready'; e.atkT = e.npc ? rnd(0.1, 0.55 - 0.07 * e.npc.rank) : rnd(0.8, 1.4) * (d.boss ? 1.3 : 1); }
+        if (e.t >= (e.npc ? 0.3 : 0.45)) { e.state = 'ready'; e.atkT = e.npc ? rnd(0.1, 0.55 - 0.07 * e.npc.rank) : rnd(0.8, 1.4) * (d.boss ? 1.3 : 1) * (stage.pace ?? 1); }
       } else if (e.state === 'throw') {
-        if (e.t >= 0.45) { throwStar(e); e.state = 'aim'; e.t = 0; e.atkT = rnd(2.2, 3.2); }
+        if (e.t >= 0.45) { throwStar(e); e.state = 'aim'; e.t = 0; e.atkT = rnd(2.2, 3.2) * (stage.pace ?? 1); }
       }
     }
     // keep apart from each other and from the player
@@ -474,7 +503,7 @@ function updEnemies(dt) {
     }
     if (d.boss) {
       e.sumT -= dt;
-      if (e.sumT <= 0 && enemies.length < 8) {   // each boss calls its own help
+      if (e.sumT <= 0 && enemies.length < 8 + Math.floor((stage.hard || 0) * 6)) {   // each boss calls its own help
         e.sumT = e.kind === 'shadow' ? rnd(8, 10) : rnd(7, 9);
         const call = e.kind === 'shogun' ? ['samurai', 'archer'] : e.kind === 'shadow' ? ['shade', 'shade'] : ['grunt', 'grunt'];
         call.forEach((k, i) => { const a = Math.atan2(e.x - px, e.z - pz) + (i ? 0.7 : -0.7), m = spawnEnemy(k, e.x + Math.sin(a) * 2.5, e.z + Math.cos(a) * 2.5, true); if (k === 'shade') fx.dust(new V3(m.x, 0, m.z), 16, 1.2); });
@@ -522,6 +551,7 @@ function deflect(pr) {
 }
 
 function fireThrow(id, sx, sy) {
+  if (id === 'horoku') { lobBomb(sx, sy); return; }
   const l = lvl(id), W = WEAP[id], n = W.count(l);
   const origin = throwOrigin();
   const base = rayDir(sx, sy);
@@ -544,11 +574,56 @@ function fireThrow(id, sx, sy) {
   }
   jab = 0.18; sfx.throwS();
 }
+// Hōroku bomb: lobbed in an arc to the enemy nearest your aim (or the ground you point at, up to 30 m away)
+const BOMB_G = 16;
+function lobBomb(sx, sy) {
+  const l = lvl('horoku'), origin = throwOrigin(), dir = rayDir(sx, sy);
+  let aim = null, best = 0.9;
+  for (const e of enemies) {
+    const c = bodyCenter(e), toC = c.clone().sub(camera.position), t = toC.dot(dir); if (t < 0) continue;
+    const off = toC.clone().addScaledVector(dir, -t).length() / (e.d.w * 2.2); if (off < best) { best = off; aim = new V3(e.x, 0.5, e.z); }
+  }
+  if (!aim) { const t = dir.y < -0.02 ? -camera.position.y / dir.y : 30; aim = camera.position.clone().addScaledVector(dir, Math.min(30, t)); aim.y = 0; }
+  const dx = aim.x - origin.x, dz = aim.z - origin.z, d = Math.min(30, Math.hypot(dx, dz)), k = d / (Math.hypot(dx, dz) || 1), ft = clamp(d / 17, 0.35, 1.1);
+  const v = new V3(dx * k / ft, (aim.y - origin.y + 0.5 * BOMB_G * ft * ft) / ft, dz * k / ft);
+  const spin = horokuMesh(); spin.scale.setScalar(1.6); const g = new THREE.Group(); g.add(spin); g.position.copy(origin); scene.add(g);
+  pProj.push({ id: 'horoku', g, spin, p: origin.clone(), v, dmg: WEAP.horoku.dmg(l), r: WEAP.horoku.radius(l), hit: new Set(), life: 2.5, stuck: false });
+  jab = 0.18; sfx.throwS();
+}
+// the blast: everything in the radius is cut along a random plane (bosses and duelling rivals take the damage instead)
+function explode(pr) {
+  removePProj(pr);
+  const p = pr.p.clone(); p.y = Math.max(0.3, p.y); const sid = ++stroke;
+  fx.sparks(p, 70, 0xffb35a, 9); fx.dust(new V3(p.x, 0, p.z), 30, pr.r * 0.6); fx.flash(p, UP, new V3(1, 0, 0), pr.r * 1.6, 0xffb35a);
+  sfx.thud(1.6); sfx.slice(1.4); shake = Math.max(shake, 0.6); hitStop = Math.max(hitStop, 0.05);
+  const randPlane = c => new THREE.Plane().setFromNormalAndCoplanarPoint(new V3(rnd(-1, 1), rnd(-0.6, 0.6), rnd(-1, 1)).normalize(), c);
+  for (const e of enemies.slice()) {
+    const dx = e.x - p.x, dz = e.z - p.z, d = Math.hypot(dx, dz) - e.d.w; if (d > pr.r || e.stormed) continue;
+    const c = bodyCenter(e), push = new V3(dx, 0.6, dz).normalize(), pl = randPlane(c);
+    if (!e.d.boss && !e.npc && (e.hp <= pr.dmg || e.downed)) killEnemy(e, pl, push, { stroke: sid, weapon: 'horoku', extra: 1 });
+    else hurtEnemy(e, pr.dmg, c, push);
+  }
+  let n = 0;
+  for (const b of phys.all()) {
+    if (b.sink || b.stroke === sid || n >= 8) continue;
+    const c = phys.center(b); if (c.distanceTo(p) > pr.r) continue;
+    cutBody(b, randPlane(c), c.clone().sub(p).setY(0.5).normalize(), sid); n++;
+  }
+  for (const q of eProj.slice()) if (q.p.distanceTo(p) < pr.r) removeEProj(q);   // stars caught in the blast
+  if (stage && stage.explore) for (const h of world.propsNear(p, pr.r).filter(h => !h.prop.queued).slice(0, 4)) {
+    h.prop.queued = true; propQ.push({ h, plane: randPlane(h.box.getCenter(new V3())), push: h.box.getCenter(new V3()).sub(p).setY(0).normalize(), sid });
+  }
+}
 function updPProj(dt) {
   const a = new V3(), b = new V3();
   for (const pr of pProj.slice()) {
     pr.life -= dt;
     if (pr.stuck) { if (pr.life <= 0) removePProj(pr); continue; }
+    if (pr.id === 'horoku') {   // bursts on the first enemy it reaches, on the ground, or when its fuse runs out
+      pr.v.y -= BOMB_G * dt; pr.p.addScaledVector(pr.v, dt); pr.g.position.copy(pr.p); pr.spin.rotation.x += dt * 9; pr.spin.rotation.z += dt * 5;
+      if (pr.p.y < 0.08 || pr.life <= 0 || enemies.some(e => Math.hypot(e.x - pr.p.x, e.z - pr.p.z) < e.d.w + 0.35 && pr.p.y < e.y + e.d.h)) explode(pr);
+      continue;
+    }
     a.copy(pr.p); pr.v.y -= 2 * dt; pr.p.addScaledVector(pr.v, dt); b.copy(pr.p);
     pr.g.position.copy(pr.p);
     if (pr.id === 'shuriken') pr.spin.rotation.z += dt * 30; else pr.spin.rotation.y += dt * 8;
@@ -689,10 +764,12 @@ function sliceSeg(seg, x0, y0, x1, y1, range, dmg, sid, weapon, bodies = true) {
   const sp = swipePlane(x0, y0, x1, y1); if (!sp) return 0;
   let kills = 0;
   for (const e of findTargets(seg, range, sid)) {
-    const spot = e.hp <= dmg && canWound(e) ? woundSpot(e, sp.plane) : null;
+    const ctr = canCounter(e), hit = ctr ? (e.d.boss ? dmg * 3 : Math.max(dmg, e.hp)) : dmg;
+    if (ctr) counterHit(e);
+    const spot = !ctr && e.hp <= hit && canWound(e) ? woundSpot(e, sp.plane) : null;
     if (spot) woundEnemy(e, spot, sp.plane, sp.push);
-    else if (e.hp <= dmg || e.downed) { killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon }); kills++; }
-    else hurtEnemy(e, dmg, nearestOnPlane(bodyCenter(e), sp.plane), sp.push);
+    else if (e.hp <= hit || e.downed) { if (!ctr && !e.downed) cleanCut(e, sp.plane); killEnemy(e, sp.plane, sp.push, { stroke: sid, weapon }); kills++; }
+    else hurtEnemy(e, hit, nearestOnPlane(bodyCenter(e), sp.plane), sp.push);
   }
   hitProjectiles(seg);
   if (bodies) sliceBodies(seg, sp, range, sid);
@@ -702,10 +779,20 @@ function sliceSeg(seg, x0, y0, x1, y1, range, dmg, sid, weapon, bodies = true) {
 // corpses and severed pieces can always be cut again
 // Explore: the blade cuts the scenery itself. A prop the stroke crosses is lifted out of the world as a loose body
 // and split along the cut; trees, stalks, lanterns and wall segments come down, houses fall apart.
+// Cuts are queued and done a couple per frame, nearest first, so a stroke through a whole grove doesn't stall a frame.
+const PROP_CUTS_PER_FRAME = 2, MAX_STROKE_PROPS = 6;
+let propQ = [];
 function sliceProps(seg, sp, range, sid) {
+  const hits = [];
   for (const h of world.propsNear(player.pos, range + 1.5)) {
-    const r = boxRect(h.box); if (r && segRect(seg, r)) cutProp(h, sp.plane, sp.push, sid);
+    if (h.prop.queued) continue;
+    const r = boxRect(h.box); if (r && segRect(seg, r)) hits.push([h.box.distanceToPoint(player.pos), h]);
   }
+  hits.sort((a, b) => a[0] - b[0]);
+  for (const [, h] of hits.slice(0, MAX_STROKE_PROPS)) { h.prop.queued = true; propQ.push({ h, plane: sp.plane.clone(), push: sp.push.clone(), sid }); }
+}
+function updPropCuts() {
+  for (let k = 0; k < PROP_CUTS_PER_FRAME && propQ.length; k++) { const q = propQ.shift(); q.h.prop.queued = false; cutProp(q.h, q.plane, q.push, q.sid); }
 }
 // thrown weapons cut whatever scenery they fly into
 const propsAt = p => stage && stage.explore ? world.propsNear(p, 0.5).filter(h => h.box.containsPoint(p)) : [];
@@ -713,6 +800,7 @@ const propsAt = p => stage && stage.explore ? world.propsNear(p, 0.5).filter(h =
 function cutProp(h, plane, push, sid) {
   const items = world.cutProp(h.prop, h.ox, h.oz); if (!items || !items.length) return [];
   const big = h.box.getSize(new V3()).length(), b = phys.addRigid(chunkFrom(items), new V3(), new V3(), sid);
+  b.scenery = true;   // stays where it falls (see ragdoll.js), its pieces too
   const at = nearestOnPlane(h.box.getCenter(new V3()), plane), k = Math.min(1, 2 / big);
   const res = phys.cut(b, plane, push, sid);
   if (!res) { b.v.copy(push).multiplyScalar(2 * k).add(new V3(0, k, 0)); b.w.set(push.z, 0, -push.x).multiplyScalar(2.5 * k); }   // missed the middle: knocked over
@@ -721,6 +809,7 @@ function cutProp(h, plane, push, sid) {
   if (stone) { sfx.clang(); fx.sparks(at, 18); } else sfx.slice(0.7);
   fx.flash(at, plane.normal, push, Math.min(6, big * 0.6), 0x120e0b); fx.dust(new V3(at.x, 0, at.z), 8, Math.min(2, 0.4 + big * 0.12));
   shake = Math.max(shake, Math.min(0.6, big * 0.04)); score += 5;
+  errandStep('cut'); gflag('prop');
   return res || [b];
 }
 // big pieces don't fly: what still stands on the ground stays as a stump (or leans away from a vertical cut),
@@ -732,16 +821,50 @@ function settleCut(p, plane, push) {
   if (bx.min.y < 0.15) { p.v.set(n.x, 0, n.z).multiplyScalar(0.4); p.w.crossVectors(UP, n).multiplyScalar(tip); }
   else { p.v.copy(fwd).multiplyScalar(1.2).addScaledVector(n, 0.4); p.v.y = Math.min(p.v.y, 0.3); p.w.crossVectors(UP, fwd).multiplyScalar(1.5 * tip); }
 }
+// one stroke cuts at most MAX_STROKE_CUTS bodies, nearest first: hacking through a pile stays one frame's work
+const MAX_STROKE_CUTS = 10;
 function sliceBodies(seg, sp, range, sid) {
+  const hits = [];
   for (const b of phys.all()) {
     if (b.stroke === sid || b.sink) continue;
-    const c = phys.center(b);
-    if (Math.hypot(c.x - player.pos.x, c.z - player.pos.z) > range + 1.5) continue;
+    const c = phys.center(b), d = Math.hypot(c.x - player.pos.x, c.z - player.pos.z);
+    if (d > range + 1.5) continue;
     const r = boxRect(phys.bounds(b));
-    if (r && segRect(seg, r)) cutBody(b, sp.plane, sp.push, sid);
+    if (r && segRect(seg, r)) hits.push([d, b]);
   }
+  hits.sort((a, b) => a[0] - b[0]);
+  for (const [, b] of hits.slice(0, MAX_STROKE_CUTS)) cutBody(b, sp.plane, sp.push, sid);
 }
 const nearestOnPlane = (p, plane) => plane.projectPoint(p, new V3());
+
+/* ============ skill: counters, perfect dodges, clean cuts ============ */
+// Timing and precision pay, mashing doesn't:
+// - COUNTER: cut a foe in the late part of his wind-up (the red ! has been up a while), or while a perfect dodge has
+//   left him open. It cuts through anything (bosses take triple damage but follow through with the blow). Earlier
+//   hits land but no longer stop the attack: he follows through, so watch the tell.
+// - PERFECT DODGE: dash or jump just before a blow that would have hit lands. Time slows and he is left open.
+// - CLEAN CUT: a killing cut straight through the middle of the body, not a graze.
+const COUNTER_FROM = 0.55, PERFECT_WIN = 0.22, OPEN_FOR = 1.2;
+const lateWindup = e => e.state === 'windup' && e.t >= e.windDur * COUNTER_FROM;
+const canCounter = e => !e.npc && !e.downed && (lateWindup(e) || (e.openT || 0) > T);
+function counterHit(e) {
+  stats.counters++; e.openT = 0;
+  floater('COUNTER!', headPos(e), 'big'); sfx.clang(); fx.sparks(bodyCenter(e), 26, 0xfff2c0, 5);
+  slowmo(0.3, 0.45); hitStop = Math.max(hitStop, 0.06); shake = Math.max(shake, 0.35);
+  ult = Math.min(100, ult + 10 * ultRate()); runCoins += 3; score += 75;
+  if (e.state === 'windup' && !e.d.boss) { e.state = 'recover'; e.t = 0; }   // knocked out of the attack (bosses follow through)
+}
+function perfectDodge(e) {
+  stats.perfect++; e.openT = T + OPEN_FOR;
+  floater('PERFECT DODGE', headPos(e), 'big'); sfx.swish(1.2);
+  slowmo(0.3, 0.6); fovKick = Math.max(fovKick, 8);
+  ult = Math.min(100, ult + 15 * ultRate()); runCoins += 2; score += 50;
+  if (tut) tut.flags.dodge = true;
+}
+function cleanCut(e, plane) {
+  if (Math.abs(plane.distanceToPoint(bodyCenter(e))) > e.d.w * 0.3 * e.s) return;
+  stats.clean++; floater('CLEAN CUT', headPos(e), ''); score += 30; runCoins += 1; ult = Math.min(100, ult + 3 * ultRate());
+}
 
 /* ============ wounds & finishers ============ */
 // A lethal blow that only clips the legs (low cut) or an arm (glancing side cut) cripples instead:
@@ -903,7 +1026,7 @@ function finKill(e, planes, push) {
   const fw = $('flashW'); fw.style.transition = 'none'; fw.style.opacity = 0.85; requestAnimationFrame(() => { fw.style.transition = 'opacity .7s'; fw.style.opacity = 0; });
   banner(finish.v.name, finish.v.kanji);
   const air = !!finish.v.air, b = e.d.value * (air ? 2 : 1);   // aerial finishers pay double
-  runCoins += b; score += air ? 500 : 300; ult = Math.min(100, ult + (air ? 25 : 15) * CH().ult);
+  runCoins += b; score += air ? 500 : 300; ult = Math.min(100, ult + (air ? 25 : 15) * ultRate());
   floater('+' + b + (air ? ' AERIAL FINISHER' : ' FINISHER BONUS'), { x: vw / 2, y: vh * 0.72 }, 'big');
   slowmo(0.08, 0.75); shake = Math.max(shake, 0.6); hitStop = Math.max(hitStop, 0.12); fovKick = -9;
   if (tut) tut.flags.finish = true;
@@ -1029,9 +1152,10 @@ function cutBody(b, plane, push, sid) {
   const air = phys.airborne(b), at = nearestOnPlane(phys.center(b), plane);
   const res = phys.cut(b, plane, push, sid);
   if (!res) return null;
-  fx.burst(at, plane.normal, b.isDoll ? 18 : 8, 0.7); fx.flash(at, plane.normal, push, 1.3);
+  if (b.scenery) fx.dust(at, 8, 0.6); else fx.burst(at, plane.normal, b.isDoll ? 18 : 8, 0.7);   // wood and stone don't bleed
+  fx.flash(at, plane.normal, push, 1.3);
   sfx.slice(0.6);
-  if (air && b.cuts < 4) { stats.air++; runCoins += 2; score += 40; ult = Math.min(100, ult + 2 * CH().ult); floater('AIR SLICE +2', at, ''); }
+  if (air && b.cuts < 4) { stats.air++; runCoins += 2; score += 40; ult = Math.min(100, ult + 2 * ultRate()); floater('AIR SLICE +2', at, ''); }
   else score += 5;
   return res;
 }
@@ -1076,8 +1200,10 @@ function killEnemy(e, plane, push, opts = {}) {
 function hurtEnemy(e, dmg, point, push) {
   if (e.npc) { npcHit(e, dmg, push); return; }
   e.hp -= dmg;
-  e.stagger = e.d.boss ? 0.18 : 0.32; e.knock = e.d.boss ? 1.2 : 4;
-  if (e.state === 'windup') { e.state = 'ready'; e.atkT = 0.6; }
+  if (!e.d.boss) {   // bosses never flinch, get knocked back or have a blow stopped: they just take the damage
+    e.stagger = 0.32; e.knock = 4;
+    if (lateWindup(e)) { e.state = 'ready'; e.atkT = 0.6; }   // only a late hit stops the blow (see COUNTER)
+  }
   if (e.d.armor || e.d.boss) { sfx.clang(); fx.sparks(point, 20); }
   else sfx.slice(0.5);
   fx.burst(point, push, e.d.boss ? 18 : 8, 0.6);
@@ -1092,10 +1218,11 @@ function addKill(e, pos, sid) {
   const mult = 1 + Math.min(3, Math.floor(comboN / 5) * 0.5);
   const coins = Math.round(e.d.value * mult);
   runCoins += coins; score += Math.round(e.d.value * 10 * mult);
-  ult = Math.min(100, ult + (e.d.boss ? 40 : 7) * CH().ult);
+  ult = Math.min(100, ult + (e.d.boss ? 40 : 7) * ultRate());
   floater(coins ? '+' + coins : 'SLICED!', pos, '');
   if (player.y > 0.5) { runCoins += 3; score += 60; floater('AERIAL KILL +3', { x: vw / 2, y: vh * 0.38 }, ''); slowmo(0.35, 0.3); }
   if (tut) tut.kills++;
+  if (e.trial) trialKill();
   if (comboN >= 2) { const c = $('combo'); c.textContent = `x${comboN} COMBO`; c.classList.add('on'); c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop'); }
   if (sid !== undefined && sid >= 0) {
     const n = (strokeKills.get(sid) || 0) + 1; strokeKills.set(sid, n);
@@ -1116,7 +1243,7 @@ function hurtPlayer(n) {
   const v = $('vignette'); v.style.transition = 'none'; v.style.opacity = 1; requestAnimationFrame(() => { v.style.transition = 'opacity .6s'; v.style.opacity = 0; });
   const h = $('hearts'); h.classList.remove('hit'); void h.offsetWidth; h.classList.add('hit');
   updHearts();
-  if (hearts <= 0) { if (stage.explore) loseDuel(); else gameOver(); }
+  if (hearts <= 0) { if (trialRun) trialFall(); else if (stage.explore) loseDuel(); else gameOver(); }
 }
 function slowmo(scale, dur) { timeScale = Math.min(timeScale, scale); slowTo = scale; slowT = Math.max(slowT, dur); }
 
@@ -1228,15 +1355,18 @@ function clearField() {
   enemies = []; pProj = []; eProj = []; timers = [];
   for (const e of npcs) { scene.remove(e.root); e.npc.tag.remove(); }
   npcs = []; talkNPC = duelNPC = null; $('dlg').classList.add('hidden'); $('npcPrompt').classList.add('hidden');
+  for (const q of propQ) q.h.prop.queued = false; propQ = [];
+  clearTrial(); removeWisp(); wispT = 8; clearCitizens(); errand = null; charmMark = -1; updQuest();
+  guide = null; $('tutSkip').textContent = 'Skip tutorial';
   fling.on = false; fling.mesh.visible = fling.chain.visible = false;
 }
 function startStage(n) {
   clearField();
   stage = makeStage(n); stage.map = stageMap(n);
   world.setExplore(false); world.setMap(stage.map); world.setTheme(stage.theme); $('minimap').classList.add('hidden');
-  maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
-  score = 0; runCoins = 0; comboN = 0; ult = Math.min(ult, 40); invuln = 0;
-  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
+  maxHearts = heartsMax(); hearts = maxHearts;
+  score = 0; runCoins = 0; comboN = 0; ult = Math.max(Math.min(ult, 40), blessed(20) ? 50 : 0); invuln = 0;
+  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0, counters: 0, perfect: 0, clean: 0 };
   killedCounted = 0; spawnT = 0.8; revived = false; bossE = null; strokeKills.clear();
   timeScale = 1; slowT = 0;
   player.pos.set(0, 0, 4); player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.06; player.dashT = player.dashCD = 0; player.y = player.vy = player.flip = 0; player.ground = true;
@@ -1258,7 +1388,7 @@ function updSpawner(dt) {
   if (!stage.queue.length) return;
   spawnT -= dt;
   const head = stage.queue[0];
-  const cap = Math.min(16, 6 + Math.floor(stage.n / 2));   // more on the field at once as stages climb
+  const cap = Math.min(24, 6 + Math.floor(stage.n * 0.6));   // more on the field at once as stages climb
   if (spawnT > 0 || enemies.length >= cap) return;
   if (EDEF[head.kind].boss && enemies.length > 2) return;
   stage.queue.shift();
@@ -1289,8 +1419,11 @@ function checkClear() {
 }
 function stageClear() {
   const n = stage.n;
-  const stars = stats.dmg === 0 ? 3 : hearts >= maxHearts / 2 ? 2 : 1;
-  const bonus = 40 + n * 12 + (stats.dmg === 0 ? 50 : 0);
+  // Stars: 3 for losing no more than the allowance (40% of your hearts, at least 2, plus 1 more every 10 stages),
+  // 2 for any clear without a revive, 1 for a clear after reviving. A flawless clear still pays extra.
+  const allow = Math.max(2, Math.ceil(maxHearts * 0.4)) + Math.floor(n / 10);
+  const stars = revived ? 1 : stats.dmg <= allow ? 3 : 2;
+  const bonus = 40 + n * 12 + (stats.dmg === 0 ? 50 : 0) + (stars === 3 ? 25 : 0);
   lastCoins = runCoins + bonus;
   save.coins += lastCoins;
   if (n >= save.stage) save.stage = n + 1;
@@ -1301,7 +1434,7 @@ function stageClear() {
   state = 'results'; sfx.win(); music('menu');
   $('resTitle').textContent = `STAGE ${n} CLEAR`;
   [...$('resStars').children].forEach((s, i) => { s.classList.toggle('on', i < stars); s.style.animationDelay = (0.15 + i * 0.18) + 's'; });
-  $('resStats').innerHTML = `<span>Enemies sliced</span><b>${stats.kills}</b><span>Best combo</span><b>x${stats.maxCombo}</b><span>Air slices</span><b>${stats.air}</b><span>Clear bonus</span><b>+${bonus}</b><span>Score</span><b>${score}</b>`;
+  $('resStats').innerHTML = `<span>Hearts lost (3★ allows ${allow})</span><b>${stats.dmg}${stats.dmg === 0 ? ' · FLAWLESS' : ''}</b><span>Enemies sliced</span><b>${stats.kills}</b><span>Best combo</span><b>x${stats.maxCombo}</b><span>Air slices</span><b>${stats.air}</b><span>Counters · perfect dodges</span><b>${stats.counters} · ${stats.perfect}</b><span>Clean cuts</span><b>${stats.clean}</b><span>Clear bonus</span><b>+${bonus}</b><span>Score</span><b>${score}</b>`;
   $('resCoins').innerHTML = `<span class="coinI"></span>+${lastCoins}`;
   resDoubled = false;
   showLayer('results'); $('hud').classList.add('hidden'); updAdUI();
@@ -1312,7 +1445,7 @@ function gameOver() {
   $('goStats').innerHTML = `<span>Stage</span><b>${stage.n}</b><span>Enemies sliced</span><b>${stats.kills}</b><span>Coins this run</span><b>${runCoins}</b>`;
   after(0.9, () => { showLayer('gameover'); $('hud').classList.add('hidden'); updAdUI(); });
 }
-function bankRunCoins() { save.coins += runCoins; runCoins = 0; persist(); }
+function bankRunCoins() { save.coins += blessed(14) ? Math.round(runCoins * 1.15) : runCoins; runCoins = 0; persist(); }
 function revive() {
   revived = true; hearts = maxHearts; invuln = 1.5; state = 'play';
   showLayer(null); $('hud').classList.remove('hidden'); updHearts();
@@ -1328,7 +1461,9 @@ function revive() {
 function pause() {
   if (state !== 'play') return;
   state = 'paused'; gameplay(false); showLayer('pause'); updToggles();
-  $('skipTutBtn').classList.toggle('hidden', !tut);
+  $('skipTutBtn').classList.toggle('hidden', !tut && !guide); $('skipTutBtn').textContent = guide ? 'Skip guide' : 'Skip tutorial';
+  $('guideBtn').classList.toggle('hidden', !stage.explore || !!guide);
+  $('pBless').innerHTML = stage.explore ? blessText() : ''; $('pBless').classList.toggle('hidden', !stage.explore);
   ptr.down = false; blade = false; joy.id = null; showJoy(); for (const k in keys) keys[k] = false;
   exitLock(); updLockUI();
 }
@@ -1496,8 +1631,8 @@ addEventListener('keydown', e => {
     return;
   }
   if (state === 'play') {
-    if (stage.explore && (c === 'KeyT' || c === 'KeyR')) { const np = nearNPC(); if (np) { if (c === 'KeyT') talk(np); else challenge(np); return; } }
-    if (n >= 1 && n <= 5) selectWeapon(WIDS[n - 1]);
+    if (stage.explore && (c === 'KeyT' || c === 'KeyR')) { const np = nearNPC(); if (np) { if (c === 'KeyT') talk(np); else challenge(np); return; } const ct = c === 'KeyT' && nearCit(); if (ct) { talkCit(ct); return; } }
+    if (n >= 1 && n <= WIDS.length) selectWeapon(WIDS[n - 1]);
     else if (c === 'KeyQ') { if (!tryFinish()) storm(); }   // finishes a crippled enemy nearby, otherwise Blade Storm
     else if (c === 'KeyE' || c === 'KeyF') storm();
     else if (c === 'KeyC' || c === 'KeyV') cycleCam();
@@ -1516,7 +1651,7 @@ addEventListener('resize', () => { resize(); if (!$('tour').classList.contains('
 function dash() {
   if (state !== 'play' || player.dashCD > 0) return;
   const d = player.moveDir.lengthSq() > 0.01 ? player.moveDir.clone() : new V3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-  player.dashDir.copy(d.normalize()); player.dashT = 0.18; player.dashCD = 0.75 * CH().dash;
+  player.dashDir.copy(d.normalize()); player.dashT = 0.18; player.dashCD = 0.75 * CH().dash * (blessed(40) ? 0.75 : 1); player.dashAt = T;
   // which way relative to where we face: forward lunge, back-step, or side-step
   const fwd = -d.x * Math.sin(player.yaw) - d.z * Math.cos(player.yaw), rgt = d.x * Math.cos(player.yaw) - d.z * Math.sin(player.yaw);
   const dir = Math.abs(fwd) >= Math.abs(rgt) ? (fwd >= 0 ? 'F' : 'B') : (rgt > 0 ? 'R' : 'L');
@@ -1528,24 +1663,24 @@ function dash() {
 }
 function jump() {
   if (state !== 'play') return;
-  if (player.ground) { player.vy = 7.6; player.ground = false; player.jumps = 1; sfx.swish(0.4); }
+  if (player.ground) { player.vy = 7.6; player.ground = false; player.jumps = 1; sfx.swish(0.4); player.jumpAt = T; }
   else if (player.jumps < 2) { player.vy = 7.2; player.jumps = 2; player.flip = 0.001; sfx.swish(0.8); fovKick = Math.max(fovKick, 6); if (tut) tut.flags.flip = true; }
 }
 function updPlayer(dt) {
   if (talkNPC) { player.vel.set(0, 0, 0); player.moveDir.set(0, 0, 0); return; }   // standing still while talking
   if (finish) { updFinishPlayer(); return; }
-  let fx = 0, fz = 0, turn = 0;
-  if (keys.KeyW || keys.ArrowUp) fz -= 1;
-  if (keys.KeyS || keys.ArrowDown) fz += 1;
-  if (keys.KeyA) fx -= 1;
-  if (keys.KeyD) fx += 1;
+  let ix = 0, iz = 0, turn = 0;   // movement input (not `fx`: that would hide the effects module)
+  if (keys.KeyW || keys.ArrowUp) iz -= 1;
+  if (keys.KeyS || keys.ArrowDown) iz += 1;
+  if (keys.KeyA) ix -= 1;
+  if (keys.KeyD) ix += 1;
   if (keys.ArrowLeft) turn += 1;
   if (keys.ArrowRight) turn -= 1;
-  if (joy.id !== null) { fz += joy.y; turn -= Math.sign(joy.x) * Math.max(0, Math.abs(joy.x) - 0.15) * 1.2; }
+  if (joy.id !== null) { iz += joy.y; turn -= Math.sign(joy.x) * Math.max(0, Math.abs(joy.x) - 0.15) * 1.2; }
   player.yaw += turn * 2.4 * dt;
-  const L = Math.hypot(fx, fz); if (L > 1) { fx /= L; fz /= L; }
+  const L = Math.hypot(ix, iz); if (L > 1) { ix /= L; iz /= L; }
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
-  const wx = fx * cy + fz * sy, wz = -fx * sy + fz * cy;
+  const wx = ix * cy + iz * sy, wz = -ix * sy + iz * cy;
   player.moveDir.set(wx, 0, wz);
   const k = Math.min(1, dt * 12);
   player.wade = stage && stage.explore && player.y < 0.15 && world.inWater(player.pos);   // wading through ponds, paddies, the moat
@@ -1601,11 +1736,12 @@ function learnKey(e) {
 const keyName = code => (layoutKeys.get(code) || code.replace(/^(Key|Digit)/, '')).toUpperCase();
 const keyText = s => s.replace(/\{(\w+)\}/g, (_, c) => c === 'MOVE' ? ['KeyW', 'KeyA', 'KeyS', 'KeyD'].map(keyName).join('') : keyName(c));
 function refreshKeyLabels() {
-  $('lockHint').querySelector('span').innerHTML = keyText(`{MOVE} move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-5 / wheel weapons · {KeyQ} Blade Storm · {KeyC} camera · {KeyP} pause`);
-  $('menuHint').innerHTML = keyText(`{MOVE} move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-5 weapons · {KeyQ} Blade Storm / finisher · {KeyP} pause`);
+  $('lockHint').querySelector('span').innerHTML = keyText(`{MOVE} move · Mouse look · Shift dash · Space jump (twice = flip)<br>Hold left click + drag to slice · Quick click = fast slash<br>1-6 / wheel weapons · {KeyQ} Blade Storm · {KeyC} camera · {KeyP} pause`);
+  $('menuHint').innerHTML = keyText(`{MOVE} move · mouse look · Shift dash · Space jump / flip<br>Hold click + drag to slice · tap to throw shuriken &amp; kunai<br>1-6 weapons · {KeyQ} Blade Storm / finisher · {KeyP} pause`);
   $('finishTip').firstElementChild.textContent = keyName('KeyQ');
   $('npcTalk').firstElementChild.textContent = keyName('KeyT'); $('npcDuel').firstElementChild.textContent = keyName('KeyR');
   if (tut && TUT_STEPS[tut.i]) { const st = TUT_STEPS[tut.i]; $('tutText').textContent = keyText(typeof st.d === 'function' ? st.d() : st.d); }
+  if (guide && GUIDE_STEPS[guide.i]) $('tutText').textContent = guideText(GUIDE_STEPS[guide.i]);
 }
 
 /* ============ UI ============ */
@@ -1656,6 +1792,8 @@ function updMenu() {
   const pin = save.map !== 'auto' ? MAPS[mapIdx(save.map)] : null, open = !pin || mapOpen(pin.id);
   $('mpLabel').innerHTML = pin ? `${pin.name.toUpperCase()}<small>${open ? pin.kanji + ' · ' + pin.desc : '🔒 REACH STAGE ' + (mapIdx(pin.id) + 1)}</small>` : `ALL MAPS<small>STAGES ROTATE THROUGH ${MAPS.filter(x => mapOpen(x.id)).length} / ${MAPS.length} UNLOCKED MAPS</small>`;
   $('exploreBtn').disabled = !mapOpen(stageMap(n));
+  $('exploreBtn').classList.toggle('pulse', !save.exGuide && save.tutDone && mapOpen(stageMap(n)));   // nudge toward explore until its guide is done
+  $('blessInfo').innerHTML = blessText();
   updCoins();
 }
 const click = (id, fn) => $(id).addEventListener('click', () => { audio.unlock(); sfx.click(); fn(); });
@@ -1702,6 +1840,7 @@ const PERK = {
   kunai: l => `Pierces ${WEAP.kunai.pierce(l)} · one-hit kills armored samurai`,
   kusarigama: () => "Cuts every enemy along the sickle's arc",
   naginata: () => 'Cleaves every enemy along the whole swipe line',
+  horoku: l => `Blast radius ${WEAP.horoku.radius(l).toFixed(1)} m · cuts every enemy caught in it`,
 };
 const statRow = (n, v, now, next) => `<div class="stat"><span class="lbl">${n}</span><i><b style="width:${Math.round(clamp(v, 0.05, 1) * 100)}%"></b></i><span class="val">${now}${next !== undefined && next !== now ? ` <em>→ ${next}</em>` : ''}</span></div>`;
 function statBars(id) {
@@ -1725,7 +1864,7 @@ function renderArsenal() {
   if (id === 'vitality') {
     $('wdName').textContent = 'Vitality'; $('wdDesc').textContent = 'Train your body. Every level adds one extra heart to survive more hits.';
     const hv = 5 + save.hearts;
-    $('wdStats').innerHTML = statRow('Hearts', hv / 9, hv, save.hearts < HEART_UP.length ? hv + 1 : undefined);
+    $('wdStats').innerHTML = statRow('Hearts', hv / (6 + HEART_UP.length), hv, save.hearts < HEART_UP.length ? hv + 1 : undefined);
     $('wdPerk').textContent = 'Up to 9 hearts. Refilled at the start of every stage.';
     $('wdLvlTxt').textContent = `Level ${save.hearts} / ${HEART_UP.length}`;
     $('wdLvl').innerHTML = HEART_UP.map((_, i) => `<s class="${i < save.hearts ? 'on' : ''}"></s>`).join('');
@@ -1763,19 +1902,11 @@ function updToggles() {
   const t = (id, on, a = 'ON', b = 'OFF') => { const el = $(id); el.textContent = on ? a : b; el.classList.toggle('on', on); };
   t('setSfx', save.sfx); t('setMus', save.mus); t('pSfx', save.sfx); t('pMus', save.mus);
   t('setCam', true, CAM_NAMES[save.cam].toUpperCase());
-  t('setQ', quality === 'high', 'HIGH', 'LOW'); t('setBlood', save.blood); t('setStyle', save.style !== 'ink', 'REALISTIC', 'INK');
+  t('setQ', quality === 'high', 'HIGH', 'LOW'); t('setBlood', save.blood);
 }
 function applyAudio() { audio.set(save.sfx, save.mus, sdk.mute || sdk.adMuted); }
 for (const [id, key] of [['setSfx', 'sfx'], ['pSfx', 'sfx'], ['setMus', 'mus'], ['pMus', 'mus']]) click(id, () => { save[key] = !save[key]; persist(); applyAudio(); updToggles(); });
 click('setCam', () => cycleCam());
-click('setStyle', () => { save.style = save.style === 'ink' ? 'real' : 'ink'; persist(); applyStyle(); updToggles(); });
-// Realistic or ink look: characters, hero, map, sky, lighting and the paper overlay all switch together
-function applyStyle() {
-  setModelStyle(save.style);
-  for (const k of Object.keys(EDEF)) templates[k] = batchParts(buildEnemy(k));
-  buildHero(chShown); world.setStyle(save.style);
-  document.body.classList.toggle('ink', save.style === 'ink');
-}
 click('setQ', () => { quality = quality === 'high' ? 'low' : 'high'; save.q = quality; persist(); applyQuality(); updToggles(); });
 click('setBlood', () => { save.blood = !save.blood; CAP.blood = fx.blood = save.blood; persist(); updToggles(); });
 $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.target.checked; });
@@ -1795,8 +1926,9 @@ $('resetChk').addEventListener('change', e => { $('resetBtn').disabled = !e.targ
 // pause / results / game over
 click('resumeBtn', resumeAndLock);
 click('restartBtn', () => { bankRunCoins(); if (stage.tutorial) startTutorial(); else if (stage.explore) startExplore(stage.map); else playStage(stage.n, true); });
-click('skipTutBtn', () => { save.tutDone = true; persist(); toMenu(); });
-click('tutSkip', () => { save.tutDone = true; persist(); toMenu(); });   // the tutorial card's own skip button
+click('skipTutBtn', () => { if (guide) { endGuide(false); resumeAndLock(); return; } save.tutDone = true; persist(); toMenu(); });
+click('tutSkip', () => { if (guide) { endGuide(false); return; } save.tutDone = true; persist(); toMenu(); });   // the tutorial card's own skip button
+click('guideBtn', () => { resumeAndLock(); startGuide(); });   // explore: replay the explorer's guide
 click('quitBtn', toMenu);
 click('resNext', () => playStage(save.stage > stage.n ? stage.n + 1 : stage.n, true));
 click('resMenu', toMenu);
@@ -1828,12 +1960,81 @@ const heroP = {}, heroW = {};
 function buildHero(id = save.char) {
   if (hero) scene.remove(hero);
   hero = batchParts(buildPlayer(id)); hero.visible = false; scene.add(hero);
-  ['hips', 'torso', 'head', 'armL', 'armR', 'elbowL', 'elbowR', 'legL', 'legR', 'kneeL', 'kneeR', 'handR', 'ribbon'].forEach(n => heroP[n] = hero.getObjectByName(n));
+  ['hips', 'torso', 'head', 'armL', 'armR', 'elbowL', 'elbowR', 'legL', 'legR', 'kneeL', 'kneeR', 'handR', 'ribbon', 'knot'].forEach(n => heroP[n] = hero.getObjectByName(n));
+  buildHeroTails();
   for (const id of WIDS) {
     const m = WEAPON_MODELS[id](); m.rotation.set(Math.PI / 2 + 0.25, 0, 0); m.visible = false;
     m.traverse(o => { if (o.isMesh) o.castShadow = true; });
     heroP.handR.add(m); heroW[id] = m;
   }
+}
+// The headband and obi-knot tails are cloth (cloth.js): the stiff strips they replace are hidden, and each tail
+// takes its colour, length and width from the strip it replaces.
+const heroTails = [], _tUp = new V3(), _tSide = new V3(), _tBack = new V3();
+let clothMat = null;
+function buildHeroTails() {
+  for (const t of heroTails) t.tail.dispose(); heroTails.length = 0;
+  clothMat = clothMat || Object.assign(MATS.body.clone(), { side: THREE.DoubleSide });
+  for (const [piv, opt] of [[heroP.ribbon, { segs: 9, flutter: 0.2, stretch: 0.85, drag: 4, follow: 12 }], [heroP.knot, { segs: 5, flutter: 0.15, stretch: 1.1, drag: 4, follow: 12 }]]) {
+    if (!piv) continue;
+    for (const m of piv.children) {
+      if (!m.isMesh || m.userData.proxy) continue;
+      m.geometry.computeBoundingBox(); const sz = m.geometry.boundingBox.getSize(new V3());
+      const color = m.geometry.attributes.color ? new THREE.Color().fromBufferAttribute(m.geometry.attributes.color, 0) : new THREE.Color(0xb3201a);
+      heroTails.push({ piv, off: m.position.clone(), tail: new ClothTail(scene, { len: sz.y * (opt.stretch || 1), width: sz.x, color, mat: clothMat, segs: opt.segs, flutter: opt.flutter, drag: opt.drag, follow: opt.follow }) });   // heavy cloth: little flutter, damped swing
+    }
+    piv.visible = false;
+  }
+}
+// What the cloth stays outside of, rebuilt each frame from the posed rig (2.5 cm clear, for the cloth's thickness):
+// the trunk's real outline (RIG.trunk: the body's 4 cm slices at rest, tested in the frame of the hips or torso joint,
+// whichever the point is nearer, so it follows the spine as it bends), the head round the headband, and the scabbard.
+const CLOTH_GAP = 0.025, _cq = new V3(), _cs = new V3(), _ce = new V3();
+function trunkCollider(piv, base, yMin, yMax) {
+  const inv = piv.matrixWorld.clone().invert(), M = piv.matrixWorld, T = RIG.trunk || [];
+  return { out: p => {
+    _cq.copy(p).applyMatrix4(inv).add(base);   // the point in the body's rest (model) space
+    if (_cq.y < yMin || _cq.y > yMax || !T.length) return;
+    let r = T[0]; for (const q of T) if (Math.abs(q.y - _cq.y) < Math.abs(r.y - _cq.y)) r = q;
+    const a = r.a + CLOTH_GAP, b = r.b + CLOTH_GAP, dx = (_cq.x - r.xc) / a, dz = (_cq.z - r.zc) / b, d = Math.hypot(dx, dz);
+    if (d >= 1) return;
+    if (d < 1e-4) _cq.z = r.zc - b; else { _cq.x = r.xc + dx / d * a; _cq.z = r.zc + dz / d * b; }   // out to the surface, straight out from the middle
+    p.copy(_cq.sub(base).applyMatrix4(M));
+  } };
+}
+function ellipsoidCollider(piv, c, rad) {
+  const inv = piv.matrixWorld.clone().invert(), M = piv.matrixWorld;
+  return { out: p => {
+    _cq.copy(p).applyMatrix4(inv).sub(c); _cs.set(_cq.x / rad.x, _cq.y / rad.y, _cq.z / rad.z); const d = _cs.length();
+    if (d >= 1 || d < 1e-5) return;
+    _cs.divideScalar(d); p.set(_cs.x * rad.x, _cs.y * rad.y, _cs.z * rad.z).add(c).applyMatrix4(M);
+  } };
+}
+function capsuleCollider(piv, a, b, r) {
+  const A = piv.localToWorld(a.clone()), B = piv.localToWorld(b.clone()), AB = B.clone().sub(A), L2 = AB.lengthSq();
+  return { out: p => {
+    const t = Math.max(0, Math.min(1, _ce.subVectors(p, A).dot(AB) / L2)); _cq.copy(A).addScaledVector(AB, t);
+    _ce.subVectors(p, _cq); const d = _ce.length(); if (d < r && d > 1e-5) p.copy(_cq).addScaledVector(_ce, r / d);
+  } };
+}
+const SCAB_A = new V3(-0.06 + 0.45 * Math.sin(0.78), 0.24 - 0.45 * Math.cos(0.78), -0.25), SCAB_B = new V3(-0.06 - 0.45 * Math.sin(0.78), 0.24 + 0.45 * Math.cos(0.78), -0.25);
+function heroColliders() {
+  const split = RIG.spine.y;
+  return [
+    trunkCollider(heroP.hips, RIG.hips, -9, split + 0.02),
+    trunkCollider(heroP.torso, RIG.spine, split - 0.02, 9),
+    ellipsoidCollider(heroP.head, new V3(0, 0.19, 0.045), new V3(0.105 + CLOTH_GAP, 0.14 + CLOTH_GAP, 0.125 + CLOTH_GAP)),
+    capsuleCollider(heroP.torso, SCAB_A, SCAB_B, 0.026 + CLOTH_GAP),
+  ];
+}
+function updHeroTails(dt) {
+  const show = hero.visible;
+  for (const t of heroTails) { t.tail.mesh.visible = show; if (!show) t.tail.ready = false; }
+  if (!show || !heroTails.length) return;
+  hero.updateMatrixWorld(true);
+  const H = heroP.head.matrixWorld;
+  _tSide.set(1, 0, 0).transformDirection(H); _tBack.set(0, 0, -1).transformDirection(H);
+  for (const t of heroTails) t.tail.update(dt, t.piv.localToWorld(t.off.clone()), _tSide, _tBack, heroColliders(), T);
 }
 function cycleCam() {
   save.cam = CAM_MODES[(CAM_MODES.indexOf(save.cam) + 1) % CAM_MODES.length]; persist();
@@ -1934,16 +2135,16 @@ function animHero(dt) {
 // Free roam over a whole map: no waves, just practice dummies to slice and hidden charms (omamori) to find.
 // Each charm pays once (remembered per map); finding them all pays a bonus.
 const CHARM_COINS = 25, CHARM_ALL = 150;
-function startExplore(id) {
+function startExplore(id, fromTut = false) {   // fromTut: straight after the first tutorial, the guide starts at once and leads on to stage 1
   clearField();
   world.setExplore(true); world.setMap(id);
   const got = save.charms[id] || [];
   world.charms.forEach((c, i) => { c.found = got.includes(i); c.g.visible = !c.found; });
-  stage = { n: 0, explore: true, map: id, boss: false, queue: [], total: world.charms.length, theme: EXPLORE_THEME[id] ?? 2, speedMul: 1 };
+  stage = { n: 0, explore: true, fromTut, map: id, boss: false, queue: [], total: world.charms.length, theme: EXPLORE_THEME[id] ?? 2, speedMul: 1 };
   world.setTheme(stage.theme);
-  maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
+  maxHearts = heartsMax(); hearts = maxHearts;
   score = 0; runCoins = 0; comboN = 0; ult = 100; invuln = 0;
-  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
+  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0, counters: 0, perfect: 0, clean: 0 };
   killedCounted = got.length; revived = false; bossE = null; strokeKills.clear(); timeScale = 1; slowT = 0;
   player.pos.set(0, 0, 4); player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.06; player.dashT = player.dashCD = 0; player.y = player.vy = player.flip = 0; player.ground = true;
   trial = null; if (!has(cur)) cur = 'katana';
@@ -1953,16 +2154,20 @@ function startExplore(id) {
   state = 'play'; vmMode = 'hand'; tut = null;
   showLayer(null); $('hud').classList.remove('hidden'); $('bossBar').classList.add('hidden'); $('tut').classList.add('hidden'); $('tutBox').classList.add('hidden');
   const m = MAPS[mapIdx(id)];
-  $('stageTag').textContent = `EXPLORE · ${m.name.toUpperCase()} · ${got.length}/${world.charms.length} CHARMS`;
+  dayT = 0.2; wx = { from: 'clear', to: 'clear', k: 1, t: rnd(60, 100) }; skyAcc = 9; envAcc = 9; updSky(0);   // morning, clear skies
+  exploreTag();
   updHearts(); buildWBar(); updHUD();
   banner(m.name, 'EXPLORE · ' + m.kanji); music('menu');
   $('minimap').classList.remove('hidden'); mmStatic = null;
   gameplay(true); requestLock(); updLockUI();
+  const devGuide = DEV && QS.has('guide');
+  if (!save.exGuide || devGuide || fromTut) after(devGuide ? 0.5 : fromTut ? 2 : GUIDE_DELAY, startGuide);   // first visit: the explorer's guide joins after a look round (dev: &guide)
 }
 function spawnDummy(d) { d.e = spawnEnemy('dummy', d.x, d.z, true); d.e.root.rotation.y = Math.atan2(-d.x, 4 - d.z); fx.dust(new V3(d.x, 0, d.z), 12, 0.8); }
 function updExplore(dt) {
   if (!stage.explore) return;
   for (const d of world.dummies) if (!enemies.includes(d.e) && (d.t += dt) > 4) { d.t = 0; spawnDummy(d); }   // practice dummies stand back up
+  updWisps(dt); updGuide(); updPropCuts(); updSky(dt); updCitizens(dt);
   const got = save.charms[stage.map] = save.charms[stage.map] || [];
   const pl = world.local(player.pos);
   world.charms.forEach((c, i) => {
@@ -1970,9 +2175,14 @@ function updExplore(dt) {
     c.found = true; c.g.visible = false; got.push(i); killedCounted = got.length;
     save.coins += CHARM_COINS; sfx.coin(); fx.sparks(new V3(player.pos.x, 1.1, player.pos.z), 40, 0xffe08a, 4);
     floater(`CHARM FOUND ${got.length}/${world.charms.length}  +${CHARM_COINS}`, { x: vw / 2, y: vh * 0.36 }, 'big');
+    const total = charmCount(), bl = BLESSINGS.find(b => b.n === total), nx = BLESSINGS.find(b => b.n > total);
+    if (bl) { banner('BLESSING', bl.t); sfx.win(); maxHearts = heartsMax(); hearts = Math.min(maxHearts, hearts + 1); updHearts(); }
+    else if (nx) floater(`${nx.n - total} more charm${nx.n - total > 1 ? 's' : ''} for a blessing: ${nx.t}`, { x: vw / 2, y: vh * 0.42 }, '');
     if (got.length === world.charms.length) { save.coins += CHARM_ALL; banner('ALL CHARMS FOUND', `+${CHARM_ALL}`); sfx.win(); }
+    if (i === charmMark) charmMark = -1;
+    errandStep('charm');
     persist();
-    $('stageTag').textContent = `EXPLORE · ${MAPS[mapIdx(stage.map)].name.toUpperCase()} · ${got.length}/${world.charms.length} CHARMS`;
+    exploreTag();
   });
 }
 // minimap (explore): centred on you; the tile's outline is drawn once and repeated, then charms, rivals and you on top
@@ -1980,7 +2190,7 @@ let mmStatic = null, mmTick = 0;
 const MM_SPAN = 130;   // metres across
 function drawMinimap() {
   if (!stage || !stage.explore || state !== 'play' || (mmTick++ % 3)) return;
-  const cv = $('minimap'), g = cv.getContext('2d'), S = cv.width, P = world.tile, k = S / MM_SPAN, base = save.style === 'ink' ? '#e6dbc2' : '#6d7d55';
+  const cv = $('minimap'), g = cv.getContext('2d'), S = cv.width, P = world.tile, k = S / MM_SPAN, base = '#6d7d55';
   if (!mmStatic) {
     mmStatic = document.createElement('canvas'); mmStatic.width = mmStatic.height = Math.ceil(P * k);
     const c = mmStatic.getContext('2d'), X = x => (x + P / 2) * k, C = P / 2 * k;
@@ -2002,7 +2212,12 @@ function drawMinimap() {
   for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) g.drawImage(mmStatic, M - (pl.x + P / 2) * k + dx * P * k, M - (pl.z + P / 2) * k + dz * P * k);
   const dot = (x, z, r, fill) => { g.fillStyle = fill; g.strokeStyle = '#1a1208'; g.lineWidth = 1; g.beginPath(); g.arc(M + x * k, M + z * k, r, 0, 7); g.fill(); g.stroke(); };
   for (const c of world.charms) if (!c.found) dot(wrap(c.x - pl.x), wrap(c.z - pl.z), 3, '#ffd34a');
+  for (const e of cits) if (!e.cit.hidden && e.cit.role !== 'walker') dot(e.x - player.pos.x, e.z - player.pos.z, 2.4, '#f6eedc');   // merchant and elder
   for (const e of npcs) dot(e.x - player.pos.x, e.z - player.pos.z, 3.2, e === duelNPC ? '#ff4a3a' : e.npc.beaten ? '#9ad08a' : '#5ab4ff');
+  const cm = world.charms[charmMark];   // the charm a rumour pointed to: a pulsing gold ring
+  if (cm && !cm.found) { g.strokeStyle = '#ffd34a'; g.lineWidth = 2; g.beginPath(); g.arc(M + wrap(cm.x - pl.x) * k, M + wrap(cm.z - pl.z) * k, 6 + 2 * Math.sin(performance.now() / 200), 0, 7); g.stroke(); }
+  if (wisp) dot(wisp.x - player.pos.x, wisp.z - player.pos.z, 3.6, '#8fe8ff');   // the waiting spirit
+  for (const e of enemies) if (e.trial) dot(e.x - player.pos.x, e.z - player.pos.z, 2.6, '#ff4a3a');   // its warriors
   g.translate(M, M); g.rotate(-player.yaw);
   g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, -6); g.lineTo(4.5, 5); g.lineTo(0, 2.5); g.lineTo(-4.5, 5); g.closePath(); g.fill(); g.stroke();
   g.restore();
@@ -2013,8 +2228,8 @@ function drawMinimap() {
 // and a temper (what they say). Walk up to one to talk (T) or challenge them to a duel (R). Duels are never to
 // the death: a beaten rival kneels and yields (coins by rank), and if you lose you're knocked down with hearts restored.
 // Talking gets you their story, rumours of hidden charms (direction and distance) and fighting tips.
-const NPC_N = 12;   // rivals kept round you (fewer on low graphics)
-const npcCap = () => quality === 'high' ? NPC_N : 8;
+const NPC_N = 22;   // rivals kept round you (fewer on low graphics)
+const npcCap = () => quality === 'high' ? NPC_N : 14;
 let npcs = [], talkNPC = null, duelNPC = null;
 const NPC_NAMES = ['Kenji', 'Haru', 'Sora', 'Ren', 'Aki', 'Yumi', 'Daichi', 'Kaede', 'Ryo', 'Mei', 'Takeshi', 'Nori', 'Hikaru', 'Suzu', 'Isamu', 'Chiyo', 'Botan', 'Jiro', 'Kiku', 'Masa', 'Tora', 'Rin'];
 const CLANS = [
@@ -2033,6 +2248,10 @@ const TEMPER = {
   wise: { hi: ['Ah. The young one with sharp eyes.', 'Sit with me a while.', 'Every path leads back here.'], win: 'The student surpasses the master... today.', lose: 'Defeat is a teacher. Listen to it.', accept: 'Show me what your hands have learned.', beaten: 'You have grown since we crossed blades.', idle: ['Still water, still mind.', 'The blade follows the eye.', 'The charms are restless today.'] },
 };
 const TIPS = [
+  'Dash just before a blow lands, not early, for a PERFECT DODGE: time slows and he is left open.',
+  'The red ! is his tell. Cut him late in his wind-up to COUNTER: it cuts through any guard.',
+  'Hitting a foe early in his wind-up will not stop the blow. Wait for the moment, then strike.',
+  'A cut straight through the middle is a CLEAN CUT and pays a bonus. Grazes do not.',
   'Cut low across the legs and a foe drops to his knees. Then press {KeyQ} for a finisher.',
   'Jump before you press {KeyQ} and the finisher happens in the air. Twice the reward.',
   'A Storm unleashed in mid-air becomes a Sky Storm: everything below is marked.',
@@ -2064,7 +2283,7 @@ function makeNPC(x, z) {
   return e;
 }
 function removeNPC(e) { scene.remove(e.root); e.npc.tag.remove(); npcs.splice(npcs.indexOf(e), 1); }
-function say(e, text, t = 3.5) { e.npc.sayT = t; const b = e.npc.tag.firstChild; b.textContent = text; }
+function say(e, text, t = 3.5) { const N = e.npc || e.cit; N.sayT = t; N.tag.firstChild.textContent = text; }
 const turnTo = (e, x, z, k) => { let da = Math.atan2(x - e.x, z - e.z) - e.root.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); e.root.rotation.y += da * k; };
 function kneel(e, dt) {   // yielding: down on one knee, head bowed
   const P = e.P, k = 1 - Math.exp(-dt * 8);
@@ -2108,22 +2327,22 @@ const nearNPC = () => { let b = null, bd = 3.2; for (const e of npcs) { if (e ==
 // name tags with speech bubbles over nearby rivals, and the talk / duel prompt for the closest one
 function drawNPCTags() {
   const live = stage && stage.explore && state === 'play' && cineW < 0.2;
-  for (const e of npcs) {
-    const t = e.npc.tag, d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z), s = live && d < 30 && toScreen(new V3(e.x, e.y + e.d.h * e.s + 0.45, e.z));
+  for (const e of [...npcs, ...cits]) {
+    const N = e.npc || e.cit, t = N.tag, d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z), s = live && !N.hidden && d < 30 && toScreen(new V3(e.x, e.y + e.d.h * e.s + 0.45, e.z));
     t.classList.toggle('hidden', !s); if (!s) continue;
     t.style.transform = `translate(${s.x}px,${s.y}px) translate(-50%,-100%) scale(${clamp(1.25 - d / 30, 0.55, 1)})`;
-    t.classList.toggle('duel', e === duelNPC); t.classList.toggle('beaten', e.npc.beaten); t.classList.toggle('say', e.npc.sayT > 0);
+    t.classList.toggle('duel', e === duelNPC); t.classList.toggle('beaten', !!N.beaten); t.classList.toggle('say', N.sayT > 0);
   }
-  const n = live && !talkNPC && !duelNPC && nearNPC(), pr = $('npcPrompt'), s = n && toScreen(new V3(n.x, 0.2, n.z));
-  pr.classList.toggle('hidden', !s); if (s) { pr.style.left = s.x + 'px'; pr.style.top = s.y + 'px'; pr.npc = n; }
+  const n = live && !talkNPC && !duelNPC && (nearNPC() || nearCit()), pr = $('npcPrompt'), s = n && toScreen(new V3(n.x, 0.2, n.z));
+  pr.classList.toggle('hidden', !s); if (s) { pr.style.left = s.x + 'px'; pr.style.top = s.y + 'px'; pr.npc = n; pr.classList.toggle('cit', !!n.cit); }
 }
-$('npcTalk').addEventListener('pointerdown', e => { e.stopPropagation(); const n = $('npcPrompt').npc; if (n) talk(n); });
+$('npcTalk').addEventListener('pointerdown', e => { e.stopPropagation(); const n = $('npcPrompt').npc; if (n) (n.cit ? talkCit(n) : talk(n)); });
 $('npcDuel').addEventListener('pointerdown', e => { e.stopPropagation(); const n = $('npcPrompt').npc; if (n) challenge(n); });
 // dialogue: the rival's line, then numbered replies
 function talk(e) {
   if (duelNPC) return;
   talkNPC = e; ptr.down = false; blade = false; for (const k in keys) keys[k] = false;
-  exitLock(); updLockUI();
+  exitLock(); updLockUI(); gflag('talk');
   const T = TEMPER[e.npc.temper];
   dlg(e, e.npc.beaten ? T.beaten : pickOne(T.hi));
 }
@@ -2135,6 +2354,7 @@ function dlg(e, text) {
     ['Who are you?', () => dlg(e, `I am ${N.name} of the ${N.clan.n} clan, a${/^[AEIOU]/.test(RANKS[N.rank].title) ? 'n' : ''} ${RANKS[N.rank].title.toLowerCase()} of rank ${N.rank}. ${N.clan.lore}`)],
     ['Heard any rumours?', () => dlg(e, rumour(e))],
     ['Teach me something.', () => dlg(e, keyText(pickOne(TIPS)))],
+    [errand && errand.giver === e ? 'About that errand...' : 'Need a hand?', () => giveErrand(e)],
     [N.beaten ? 'Rematch!' : 'I challenge you to a duel!', () => challenge(e)],
     ['Farewell.', closeDlg],
   ];
@@ -2144,10 +2364,16 @@ function dlg(e, text) {
 }
 function closeDlg() { if (!talkNPC) return; talkNPC = null; $('dlg').classList.add('hidden'); requestLock(); updLockUI(); }
 // where's the nearest charm you haven't found? (the map repeats, so measure to the nearest copy)
-function rumour(e) {
+function nearestCharm() {
   const P = world.tile, pl = world.local(player.pos), wrap = v => v - Math.round(v / P) * P;
   let best = null, bd = 1e9;
-  for (const c of world.charms) if (!c.found) { const dx = wrap(c.x - pl.x), dz = wrap(c.z - pl.z), d = Math.hypot(dx, dz); if (d < bd) { bd = d; best = { dx, dz }; } }
+  world.charms.forEach((c, i) => { if (c.found) return; const dx = wrap(c.x - pl.x), dz = wrap(c.z - pl.z), d = Math.hypot(dx, dz); if (d < bd) { bd = d; best = { dx, dz, i, d }; } });
+  if (best) charmMark = best.i;   // a gold marker leads the way (drawMarkers, minimap)
+  return best;
+}
+function rumour(e) {
+  const best = nearestCharm(), bd = best ? best.d : 0;
+  gflag('rumour');
   if (!best) return 'You have found every charm in these lands. Even I am impressed.';
   const dirs = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
   const dir = dirs[Math.round(((Math.atan2(best.dx, -best.dz) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8], paces = Math.max(5, Math.round(bd / 5) * 5);
@@ -2156,7 +2382,7 @@ function rumour(e) {
 }
 // duels: a short stand-off, then he fights like an enemy of his rank until one of you is beaten
 function challenge(e) {
-  if (duelNPC || e.npc.yieldT > 0) return;
+  if (duelNPC || trialRun || e.npc.yieldT > 0) return;
   const N = e.npc;
   if (talkNPC) { talkNPC = null; $('dlg').classList.add('hidden'); }
   duelNPC = e; say(e, TEMPER[N.temper].accept, 2.5);
@@ -2197,7 +2423,7 @@ function endDuel(e) {
   const i = enemies.indexOf(e); if (i >= 0) enemies.splice(i, 1);
   if (e.marks) { scene.remove(e.marks); for (const m of e.marks.children) m.geometry.dispose(); e.marks = null; }
   Object.assign(e, { stormed: null, frozen: false, air: null, y: 0, stagger: 0, downed: null, finishing: false, speed: 1.4, state: 'idle' });
-  duelNPC = null; for (const pr of eProj.slice()) removeEProj(pr); $('bossBar').classList.add('hidden');
+  duelNPC = null; for (const pr of eProj.slice()) removeEProj(pr); $('bossBar').classList.add('hidden'); gflag('duel');   // win or lose, the guide counts it
   hearts = maxHearts; updHearts();
 }
 function npcYield(e) {
@@ -2206,6 +2432,7 @@ function npcYield(e) {
   const coins = 30 * N.rank; save.coins += coins; save.duelWins = (save.duelWins || 0) + 1; persist();
   banner('VICTORY', `${N.name} yields`); sfx.win(); slowmo(0.3, 0.6); fx.sparks(bodyCenter(e), 30, 0xffe08a, 5);
   floater(`+${coins} DUEL WON`, { x: vw / 2, y: vh * 0.36 }, 'big'); say(e, TEMPER[N.temper].win, 4.5);
+  errandStep('duel', N.clan);
 }
 function loseDuel(fled = false) {
   const e = duelNPC; invuln = 2.5; sfx.lose(); slowmo(0.3, 0.8);
@@ -2213,6 +2440,363 @@ function loseDuel(fled = false) {
   endDuel(e); say(e, fled ? 'Running away? Hah!' : TEMPER[e.npc.temper].lose, 4);
   banner(fled ? 'FORFEIT' : 'DEFEATED', `${e.npc.name} wins the duel`);
   if (!fled) { const dx = player.pos.x - e.x, dz = player.pos.z - e.z, l = Math.hypot(dx, dz) || 1; player.vel.set(dx / l * 9, 0, dz / l * 9); player.vy = 5; player.ground = false; }
+}
+
+/* ============ explore: spirit trials, errands, rumour markers ============ */
+// Spirit trials: a glowing spirit drifts somewhere near you (cyan on the minimap). Touch it and it calls up spirit
+// warriors that rise round you a few at a time: 50 of them, cut down before the time runs out. Each trial you clear
+// puts more on the field at once and brings tougher kinds. Clearing one pays coins and fills the Storm gauge; falling (or the
+// time running out) ends it, with your hearts restored.
+const TRIAL_TIME = 180, TRIAL_COINS = 150, TRIAL_FOES = 50;
+let wisp = null, trialRun = null, wispT = 8, charmMark = -1, errand = null;
+const wispMat = new THREE.MeshBasicMaterial({ color: 0xe8fbff, toneMapped: false });
+const wispGlow = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, toneMapped: false, transparent: true, opacity: 0.35, depthWrite: false });
+function openSpot(x0, z0, d0, d1, dir, outside) {   // open ground d0-d1 m from (x0, z0) (outside the arena if asked); dir narrows the heading
+  for (let k = 0; k < 12; k++) {
+    const a = dir === undefined ? rnd(0, Math.PI * 2) : dir + rnd(-0.9, 0.9), d = rnd(d0, d1), q = { x: x0 + Math.sin(a) * d, z: z0 - Math.cos(a) * d }, x = q.x, z = q.z;
+    world.collide(q, 0.9);
+    const lp = world.local(q);
+    if (Math.hypot(q.x - x, q.z - z) < 0.05 && (!outside || Math.hypot(lp.x, lp.z) > world.wallR + 2)) return q;
+  }
+  return null;
+}
+const ahead = () => -player.yaw;   // heading straight in front of you, in openSpot's angle convention
+function spawnWisp(d0 = 18, d1 = 35) {
+  removeWisp();
+  const q = openSpot(player.pos.x, player.pos.z, d0, d1, d0 < 10 ? ahead() : undefined); if (!q) return;   // close ones (the guide's) go in front of you
+  const g = new THREE.Group(); g.position.set(q.x, 1.3, q.z);
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 12), wispMat), new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), wispGlow));
+  scene.add(g); wisp = { x: q.x, z: q.z, g };
+}
+function removeWisp() { if (wisp) { scene.remove(wisp.g); wisp = null; } }
+function trialFoes() {   // how many, how many at once, and which kinds: grows with the trials you've cleared
+  const n = save.trials || 0, kinds = ['grunt', 'grunt', 'runner'];
+  if (n >= 1) kinds.push('archer'); if (n >= 3) kinds.push('samurai'); if (n >= 5) kinds.push('assassin'); if (n >= 8) kinds.push('brute');
+  return { total: TRIAL_FOES, live: Math.min(8, 4 + Math.floor(n / 2)), kinds };
+}
+function trialSpawn() {   // spirits rise round you; bandits come in from the edge of the town
+  const R = trialRun, q = (R.raid ? openSpot(R.town.x, R.town.z, R.town.r, R.town.r + 8) : openSpot(player.pos.x, player.pos.z, 7, 12)) || { x: player.pos.x + rnd(-8, 8), z: player.pos.z + rnd(-8, 8) };
+  const e = spawnEnemy(pickOne(R.kinds), q.x, q.z, true); e.trial = true; R.spawned++;
+  e.root.rotation.y = Math.atan2(player.pos.x - q.x, player.pos.z - q.z);
+  fx.dust(new V3(q.x, 0, q.z), 16, 1.2); fx.sparks(new V3(q.x, 1, q.z), 20, 0x8fe8ff, 3);
+}
+function startTrial() {
+  removeWisp(); const F = trialFoes();
+  trialRun = { kills: 0, spawned: 0, total: F.total, live: F.live, kinds: F.kinds, left: TRIAL_TIME, next: 1.2 };
+  banner('SPIRIT TRIAL', `Defeat ${F.total} spirit warriors in ${TRIAL_TIME} s`); sfx.warn(); gflag('trial');
+  hearts = maxHearts; updHearts(); updQuest();
+}
+function clearTrial() {
+  if (!trialRun) return; trialRun = null;
+  for (const e of enemies.filter(e => e.trial)) {   // the ones still standing fade back into smoke
+    scene.remove(e.root); enemies.splice(enemies.indexOf(e), 1);
+    if (e.marks) { scene.remove(e.marks); e.marks = null; }
+    fx.dust(new V3(e.x, 0.5, e.z), 14, 1);
+  }
+}
+function trialKill() {
+  const R = trialRun; if (!R) return;
+  R.kills++; score += 40; updQuest();
+  if (R.kills >= R.total) endTrial(true);
+}
+function trialFall() { endTrial(false); hearts = maxHearts; updHearts(); invuln = 2.5; }   // knocked down: hearts back, trial over
+function endTrial(won) {
+  if (!trialRun) return;
+  const R = trialRun; clearTrial(); wispT = 25; updQuest();
+  if (R.raid) { endRaid(R, won); return; }
+  if (!won) { banner('THE SPIRIT FADES', 'Trial failed'); sfx.lose(); return; }
+  save.coins += TRIAL_COINS; save.trials = (save.trials || 0) + 1; ult = 100; persist();
+  banner('TRIAL COMPLETE', `+${TRIAL_COINS} · Storm ready`); sfx.win(); slowmo(0.3, 0.5);
+  fx.sparks(new V3(player.pos.x, 1.2, player.pos.z), 40, 0x8fe8ff, 5);
+  errandStep('trial');
+}
+function updWisps(dt) {
+  const t = performance.now() / 1000;
+  if (wisp) {
+    const d = Math.hypot(wisp.x - player.pos.x, wisp.z - player.pos.z);
+    wisp.g.position.y = 1.3 + Math.sin(t * 2.2) * 0.18; wisp.g.children[1].scale.setScalar(1 + Math.sin(t * 5) * 0.15);
+    if (d > 110) { removeWisp(); wispT = 5; }
+    else if (d < 1.4 && !duelNPC && !talkNPC) startTrial();
+  } else if (!trialRun && (wispT -= dt) <= 0) { spawnWisp(); wispT = 30; }
+  const R = trialRun; if (!R) return;
+  if ((R.left -= dt) <= 0 || (R.raid && Math.hypot(player.pos.x - R.town.x, player.pos.z - R.town.z) > 75)) { endTrial(false); return; }   // a raid is lost if you leave the town
+  const alive = enemies.filter(e => e.trial).length;
+  if (R.spawned < R.total && alive < R.live && (R.next -= dt) <= 0) { trialSpawn(); R.next = 0.6; }
+  updQuest();
+}
+// Errands: ask a rival "Need a hand?" and they give you a job (one at a time). It shows under your hearts and pays
+// coins by their rank the moment it's done, wherever they are by then.
+const ERRAND_ASK = { kind: 'Would you help me? ', proud: 'Prove you are worth my time. ', gruff: 'Make yourself useful. ', wise: 'A task, to test your path. ' };
+function giveErrand(e) {
+  const N = e.npc;
+  if (errand && errand.giver === e) return dlg(e, `Still waiting. ${errand.text}${errand.need > 1 ? ` (${errand.got}/${errand.need})` : ''}.`);
+  if (errand) return dlg(e, `You already carry ${errand.name}'s errand. Finish that first.`);
+  const kinds = ['cut', 'duel', 'trial', 'raid']; if (world.charms.some(c => !c.found)) kinds.push('charm');
+  const kind = pickOne(kinds), reward = 40 + 15 * N.rank, seen = npcs.map(o => o.npc.clan).filter(c => c !== N.clan);
+  const clan = seen.length ? pickOne(seen) : pickOne(CLANS.filter(c => c !== N.clan)), need = kind === 'cut' ? 4 + Math.floor(Math.random() * 5) : 1;
+  const text = { cut: `Cut down ${need} pieces of scenery`, duel: `Beat a ninja of the ${clan.n} clan in a duel`, trial: 'Finish a spirit trial', charm: 'Find a hidden charm', raid: `Defend ${world.town.name} from a bandit raid` }[kind];
+  errand = { kind, need, got: 0, clan, text, reward, giver: e, name: N.name };
+  gflag('errand'); updQuest();
+  dlg(e, `${ERRAND_ASK[N.temper]}${text}. ${reward} coins when it is done.`);
+}
+function errandStep(kind, arg) {
+  const E = errand; if (!E || E.kind !== kind || (kind === 'duel' && arg !== E.clan)) return;
+  if (++E.got < E.need) { updQuest(); return; }
+  errand = null; save.coins += E.reward; save.errands = (save.errands || 0) + 1; persist();
+  banner('ERRAND DONE', `+${E.reward} · ${E.name} thanks you`); sfx.win();
+  if (npcs.includes(E.giver)) say(E.giver, TEMPER[E.giver.npc.temper].win, 4);
+  updQuest();
+}
+let questTxt = '';
+function updQuest() {
+  const R = trialRun, lines = [];
+  if (errand) lines.push(`ERRAND · ${errand.text}${errand.need > 1 ? ` · ${errand.got}/${errand.need}` : ''}`);
+  if (R) lines.push(`${R.raid ? 'BANDIT RAID' : 'SPIRIT TRIAL'} · ${R.kills}/${R.total} DEFEATED · ${Math.ceil(Math.max(0, R.left))}s`);
+  const s = lines.join('<br>'); if (s === questTxt) return; questTxt = s;
+  $('quest').innerHTML = s; $('quest').classList.toggle('hidden', !s);
+}
+// gold marker on the charm a rumour pointed you to, cyan on the waiting spirit, white on where the guide sends you: over the spot when
+// it's on screen, an arrow at the screen edge when it isn't
+function drawMarkers() {
+  if (!stage || !stage.explore || state !== 'play' || cineW > 0.2) return;
+  const P = world.tile, pl = world.local(player.pos), wrap = v => v - Math.round(v / P) * P, out = [], t = performance.now() / 1000;
+  const c = world.charms[charmMark]; if (c && !c.found) out.push([new V3(player.pos.x + wrap(c.x - pl.x), 1.6, player.pos.z + wrap(c.z - pl.z)), '#ffd34a']);
+  if (guide && guide.goal) out.push([new V3(guide.goal.x, 1.4, guide.goal.z), '#ffffff']);
+  if (wisp && Math.hypot(wisp.x - player.pos.x, wisp.z - player.pos.z) < 60) out.push([new V3(wisp.x, 1.9, wisp.z), '#8fe8ff']);
+  const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
+  for (const [p, col] of out) {
+    const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z), s = toScreen(p);
+    tDrawn = true; tctx.save(); tctx.fillStyle = col; tctx.strokeStyle = '#120e0b'; tctx.lineWidth = 2; tctx.shadowColor = '#000'; tctx.shadowBlur = 6;
+    if (s && s.x > 30 && s.x < vw - 30 && s.y > 30 && s.y < vh - 30) {
+      tctx.translate(s.x, s.y - 26 + Math.sin(t * 4) * 4);
+      tctx.beginPath(); tctx.moveTo(0, 10); tctx.lineTo(-8, -2); tctx.lineTo(0, -10); tctx.lineTo(8, -2); tctx.closePath(); tctx.fill(); tctx.stroke();
+      tctx.font = '700 12px "Segoe UI",system-ui,sans-serif'; tctx.textAlign = 'center'; tctx.fillText(`${Math.round(d)} m`, 0, -16);
+    } else {
+      const dx = p.x - player.pos.x, dz = p.z - player.pos.z, a = Math.atan2(dx * cy - dz * sy, -dx * sy - dz * cy);
+      tctx.translate(vw / 2 + Math.sin(a) * (vw / 2 - 70), vh / 2 - Math.cos(a) * (Math.cos(a) > 0 ? vh / 2 - 70 : vh / 2 - 130)); tctx.rotate(a);
+      tctx.beginPath(); tctx.moveTo(0, -16); tctx.lineTo(11, 8); tctx.lineTo(0, 3); tctx.lineTo(-11, 8); tctx.closePath(); tctx.fill(); tctx.stroke();
+    }
+    tctx.restore();
+  }
+}
+
+// the charm count, blessings earned and the next one (main menu and explore pause menu)
+function blessText() {
+  const c = charmCount(), got = BLESSINGS.filter(b => c >= b.n), nx = BLESSINGS.find(b => c < b.n);
+  return `<b>CHARMS ${c}/${MAPS.length * 8}</b>${got.length ? ' · ' + got.map(b => b.t).join(' · ') : ''}${nx ? `<br><small>Next blessing at ${nx.n}: ${nx.t}</small>` : ''}`;
+}
+
+/* ============ day, night and weather (explore) ============ */
+// A whole day takes DAY_LEN seconds: dawn, day, dusk and night, each held a while then blended into the next.
+// The weather drifts between clear, cloudy, rain, storms and fog (snow and blizzards on the snowy pass), blending
+// over a few seconds; storms throw lightning. The sky is re-coloured ten times a second, reflections every few.
+const DAY_LEN = 420, DAY_KEYS = [THEMES_REAL[0], THEMES_REAL[2], DUSK, THEMES_REAL[1]], DAY_NAMES = ['DAWN', 'DAY', 'DUSK', 'NIGHT'];
+const WX_ODDS = { clear: 3, cloudy: 2, rain: 1.4, storm: 0.6, fog: 1 };
+let dayT = 0.2, wx = { from: 'clear', to: 'clear', k: 1, t: 80 }, skyAcc = 0, envAcc = 0, boltT = 5, skyLabel = '';
+const dayPhase = () => { const seg = (dayT % 1) * 4, i = Math.floor(seg), f = seg - i; return { i, t: f < 0.7 ? 0 : smooth((f - 0.7) / 0.3) }; };
+const isNight = () => { const P = dayPhase(); return P.i === 3 ? P.t < 0.5 : P.i === 2 && P.t > 0.5; };
+const wxName = id => world.particles === 'snow' ? { rain: 'SNOW', storm: 'BLIZZARD' }[id] || WEATHER[id].name.toUpperCase() : WEATHER[id].name.toUpperCase();
+function updSky(dt) {
+  dayT += dt / DAY_LEN;
+  if ((wx.t -= dt) <= 0) {   // the weather turns
+    let x = Math.random() * Object.values(WX_ODDS).reduce((a, b) => a + b), next = 'clear';
+    for (const [id, w] of Object.entries(WX_ODDS)) { x -= w; if (x <= 0) { next = id; break; } }
+    if (next !== wx.to) { wx = { from: wx.to, to: next, k: 0, t: rnd(70, 140) }; toast(`The weather turns: ${wxName(next).toLowerCase()}`); } else wx.t = rnd(40, 80);
+  }
+  wx.k = Math.min(1, wx.k + dt / 12);
+  if (wx.to === 'storm' && wx.k > 0.6 && (boltT -= dt) <= 0) {   // lightning: a white flash, thunder a moment later
+    boltT = rnd(6, 16); const fw = $('flashW'); fw.style.transition = 'none'; fw.style.opacity = 0.45;
+    requestAnimationFrame(() => { fw.style.transition = 'opacity .6s'; fw.style.opacity = 0; }); after(rnd(0.3, 1.2), () => { sfx.thud(2.2); shake = Math.max(shake, 0.15); });
+  }
+  if ((skyAcc += dt) < 0.1) return; skyAcc = 0;
+  const P = dayPhase(), a = WEATHER[wx.from], b = WEATHER[wx.to], k = smooth(wx.k), w = {};
+  for (const key of ['cover', 'fogMul', 'dim', 'rain']) w[key] = a[key] + (b[key] - a[key]) * k;
+  const env = (envAcc += 0.1) > 4; if (env) envAcc = 0;
+  world.setSky(DAY_KEYS[P.i], DAY_KEYS[(P.i + 1) % 4], P.t, w, env);
+  const label = `${DAY_NAMES[P.t < 0.5 ? P.i : (P.i + 1) % 4]} · ${wxName(k < 0.5 ? wx.from : wx.to)}`;
+  if (label !== skyLabel) { skyLabel = label; exploreTag(); }
+}
+function exploreTag() {
+  if (!stage || !stage.explore) return;
+  const got = (save.charms[stage.map] || []).length;
+  $('stageTag').textContent = `EXPLORE · ${MAPS[mapIdx(stage.map)].name.toUpperCase()} · ${got}/${world.charms.length} CHARMS${skyLabel ? ' · ' + skyLabel : ''}`;
+}
+
+/* ============ towns and townsfolk (explore) ============ */
+// Each map has a town (world.town; the village map's is its own square). Near it, townsfolk walk the square, a
+// merchant keeps a stall and the elder stands by the bounty board. Talk to any of them (T). They can't be harmed:
+// they aren't fighters, and during a bandit raid they take shelter until it's over.
+const CIT_NAMES = ['Ume', 'Goro', 'Hana', 'Taro', 'Sachi', 'Kichi', 'Fumi', 'Jun', 'Nobu', 'Oto', 'Shin', 'Tama', 'Yasu', 'Kane'];
+const CIT_LINES = {
+  day: ['Fine weather for the market.', 'Have you tried the tea at the stall?', 'Mind the bandits on the roads.', 'My son wants to be a ninja like you.'],
+  night: ['Lanterns are lit. Stay safe out there.', 'Bandits love a dark night.', 'The spirits wander after dusk.', 'Late to be out, traveller.'],
+  rain: ['This rain will do the rice good.', 'Come in out of the wet!', 'Puddles everywhere...'],
+  storm: ['Thunder! The kami are angry.', 'Close the shutters, quick!'],
+};
+const WARES = [
+  { n: 'Healing tea', c: 30, d: 'Restores all your hearts.', ok: () => hearts < maxHearts, buy: () => { hearts = maxHearts; updHearts(); } },
+  { n: 'Storm talisman', c: 120, d: 'Fills your Storm gauge.', ok: () => ult < 100, buy: () => { ult = 100; } },
+  { n: 'Charm map', c: 150, d: 'Marks the nearest charm you have not found.', ok: () => world.charms.some(c => !c.found), buy: () => nearestCharm() },
+  { n: 'Spirit incense', c: 80, d: 'Calls a spirit (and its trial) to you.', ok: () => !trialRun, buy: () => spawnWisp(4, 7) },
+];
+let cits = [], citKey = null;
+const citN = () => quality === 'high' ? 9 : 5;
+function townAt() {   // the nearest copy of this map's town (the map repeats), in world coordinates
+  const T = world.town; if (!T) return null; const P = world.tile, ti = Math.round((player.pos.x - T.x) / P), tj = Math.round((player.pos.z - T.z) / P);
+  return { ...T, x: T.x + ti * P, z: T.z + tj * P, ox: ti * P, oz: tj * P, key: ti + ',' + tj };
+}
+function makeCitizen(x, z, role) {
+  const e = spawnEnemy('citizen' + Math.floor(Math.random() * 4), x, z, true); enemies.splice(enemies.indexOf(e), 1);
+  const C = e.cit = { role, name: pickOne(CIT_NAMES), home: { x, z }, tx: x, tz: z, wait: rnd(0, 4), sayT: 0, sayCD: rnd(2, 8), stuck: 0, tag: document.createElement('div') };
+  e.speed = 1.2; e.state = 'idle';
+  C.tag.className = 'npcTag'; C.tag.innerHTML = role === 'walker' ? '<i></i>' : `<i></i><b>${C.name}</b><small>${role === 'merchant' ? 'Merchant' : 'Village elder'}</small>`;
+  $('npcTags').appendChild(C.tag); cits.push(e);
+  return e;
+}
+function clearCitizens() { for (const e of cits) { scene.remove(e.root); e.cit.tag.remove(); } cits = []; citKey = null; }
+function spawnCitizens(tw) {
+  clearCitizens(); citKey = tw.key;
+  const st = tw.stalls[0], bd = tw.board;
+  makeCitizen(st.x + tw.ox, st.z + tw.oz, 'merchant'); makeCitizen(bd.x + tw.ox, bd.z + tw.oz, 'elder');
+  for (let i = 0; i < citN(); i++) { const q = openSpot(tw.x, tw.z, 3, tw.r - 3); if (q) makeCitizen(q.x, q.z, 'walker'); }
+  if (trialRun && trialRun.raid) hideCitizens(true);
+}
+function hideCitizens(on) {   // a raid: everyone takes shelter (and comes back out when it's over)
+  for (const e of cits) { e.cit.hidden = on; if (on) { scene.remove(e.root); fx.dust(new V3(e.x, 0.3, e.z), 8, 0.6); } else scene.add(e.root); }
+}
+function updCitizens(dt) {
+  const tw = townAt(); if (!tw || !tw.stalls) return;
+  const d = Math.hypot(player.pos.x - tw.x, player.pos.z - tw.z);
+  if (d < 85 && citKey !== tw.key) spawnCitizens(tw); else if (d > 120 && cits.length && !(talkNPC && talkNPC.cit)) clearCitizens();
+  const night = isNight(), lines = wx.to === 'storm' ? CIT_LINES.storm : wx.to === 'rain' && wx.k > 0.5 ? CIT_LINES.rain : night ? CIT_LINES.night : CIT_LINES.day;
+  for (const e of cits) {
+    const C = e.cit; C.sayT -= dt; if (C.hidden) continue;
+    const dist = Math.hypot(player.pos.x - e.x, player.pos.z - e.z);
+    if (C.role !== 'walker' || e === talkNPC || dist < 3.5) { e.state = 'idle'; if (dist < 7) turnTo(e, player.pos.x, player.pos.z, Math.min(1, dt * 4)); }
+    else if ((C.wait -= dt) > 0) e.state = 'idle';
+    else {
+      let mx = C.tx - e.x, mz = C.tz - e.z; const l = Math.hypot(mx, mz);
+      if (l < 0.6 || C.stuck > 1.5) { const q = openSpot(tw.x, tw.z, 2, tw.r - 2); if (q) { C.tx = q.x; C.tz = q.z; } C.wait = rnd(2, 7); C.stuck = 0; }
+      else {
+        e.state = 'run'; mx /= l; mz /= l;
+        const ox = e.x, oz = e.z, q = { x: e.x + mx * e.speed * dt, z: e.z + mz * e.speed * dt }; world.collide(q, e.d.w);
+        e.x = q.x; e.z = q.z; C.stuck = Math.hypot(e.x - ox, e.z - oz) < e.speed * dt * 0.3 ? C.stuck + dt : 0;
+        turnTo(e, C.tx, C.tz, Math.min(1, dt * 5));
+      }
+    }
+    if (dist < 8 && (C.sayCD -= dt) <= 0 && e !== talkNPC) { say(e, C.role === 'merchant' ? pickOne(['Fresh tea! Talismans!', 'Come, have a look!', 'Best prices in town!']) : C.role === 'elder' ? pickOne(['Ninja! A word, please.', 'Our town needs a blade like yours.']) : pickOne(lines)); C.sayCD = rnd(10, 20); }
+    const show = dist < 45; e.root.visible = show; e.root.matrixWorldAutoUpdate = show;
+    if (show) animEnemy(e, dt); e.root.position.set(e.x, 0, e.z);
+  }
+}
+const nearCit = () => { let b = null, bd = 2.8; for (const e of cits) { if (e.cit.hidden) continue; const d = Math.hypot(e.x - player.pos.x, e.z - player.pos.z); if (d < bd) { bd = d; b = e; } } return b; };
+function talkCit(e) {
+  if (duelNPC) return;
+  talkNPC = e; ptr.down = false; blade = false; for (const k in keys) keys[k] = false;
+  exitLock(); updLockUI(); gflag('town');
+  const C = e.cit;
+  cdlg(e, C.role === 'merchant' ? 'Welcome, welcome! Everything a wandering blade could need.' : C.role === 'elder' ? `Welcome to ${world.town.name}, ninja. We are simple folk, and the bandits know it.` : pickOne(isNight() ? CIT_LINES.night : CIT_LINES.day));
+}
+function cdlg(e, text) {
+  const C = e.cit, tw = townAt();
+  $('dlgName').innerHTML = `${C.name} <small>${C.role === 'merchant' ? 'Merchant' : C.role === 'elder' ? 'Village elder' : 'Townsfolk'} · ${world.town.name}</small>`;
+  $('dlgText').textContent = text;
+  let opts;
+  if (C.role === 'merchant') opts = [...WARES.map(w => [`${w.n} · ${w.c} coins`, () => {
+    if (!w.ok()) return cdlg(e, `You have no need of ${w.n.toLowerCase()} right now.`);
+    if (save.coins < w.c) return cdlg(e, `${w.n} costs ${w.c} coins. Come back with a fuller purse!`);
+    save.coins -= w.c; persist(); w.buy(); sfx.coin(); updHUD(); cdlg(e, `${w.n}: ${w.d} Thank you kindly!`);
+  }]), ['Farewell.', closeDlg]];
+  else if (C.role === 'elder') opts = [
+    ['Any trouble in town?', () => cdlg(e, `Bandits raid us${isNight() ? ' tonight, I fear' : ' often'}. Drive them off and the town will pay ${raidPay()} coins.`)],
+    ['I will defend the town!', () => { if (trialRun || duelNPC) return cdlg(e, 'Finish what you are doing first, ninja.'); closeDlg(); startRaid(tw); }],
+    ['Tell me about this town.', () => cdlg(e, `${world.town.name} has stood here for three hundred years. Rice, tea and quiet, when the bandits allow it. The merchant by the well sells what travellers need.`)],
+    ['Farewell.', closeDlg]];
+  else opts = [
+    ['How are you?', () => cdlg(e, pickOne(wx.to === 'rain' || wx.to === 'storm' ? [...CIT_LINES.rain, ...CIT_LINES.storm] : isNight() ? CIT_LINES.night : CIT_LINES.day))],
+    ['Any news?', () => cdlg(e, wisp ? (() => { const dx = wisp.x - player.pos.x, dz = wisp.z - player.pos.z, dirs = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west']; return `A spirit light was seen to the ${dirs[Math.round(((Math.atan2(dx, -dz) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8]}. They say it tests the brave.`; })() : pickOne(['The elder is worried about bandits.', 'They say charms bring blessings to those who gather them.', 'A rival ninja passed through this morning.']))],
+    ['Farewell.', closeDlg]];
+  $('dlgOpts').innerHTML = '';
+  opts.forEach(([label, fn], i) => { const b = document.createElement('button'); b.className = 'btn sm'; b.innerHTML = `<i>${i + 1}</i>${label}`; b.addEventListener('click', ev => { ev.stopPropagation(); sfx.click(); fn(); }); $('dlgOpts').appendChild(b); });
+  $('dlg').classList.remove('hidden');
+}
+// Bandit raids: bandits pour in from the edge of town, a few at a time; beat them all within the time (and stay in
+// town). Each raid repelled makes the next bigger and brings tougher kinds; night raids pay half again.
+const raidPay = () => Math.round((120 + 20 * Math.min(10, save.raids || 0)) * (isNight() ? 1.5 : 1));
+function startRaid(tw) {
+  if (!tw || trialRun || duelNPC) return;
+  const n = save.raids || 0, kinds = ['grunt', 'grunt', 'runner', 'archer'];
+  if (n >= 2) kinds.push('samurai'); if (n >= 4) kinds.push('brute'); if (n >= 6) kinds.push('assassin');
+  trialRun = { raid: true, town: tw, pay: raidPay(), kills: 0, spawned: 0, total: Math.min(30, 12 + 3 * n), live: Math.min(7, 4 + Math.floor(n / 2)), kinds, left: 150, next: 2 };
+  hideCitizens(true); banner('BANDIT RAID', `Defend ${tw.name}: ${trialRun.total} bandits`); sfx.warn();
+  hearts = maxHearts; updHearts(); updQuest();
+}
+function endRaid(R, won) {
+  hideCitizens(false);
+  if (!won) { banner('THE BANDITS ESCAPE', `${R.town.name} is plundered`); sfx.lose(); return; }
+  save.coins += R.pay; save.raids = (save.raids || 0) + 1; ult = 100; persist();
+  banner('TOWN SAVED', `+${R.pay} · ${R.town.name} cheers you`); sfx.win(); slowmo(0.3, 0.5);
+  for (const e of cits) say(e, pickOne(['Hooray!', 'Thank you, ninja!', 'Our hero!', 'They ran like rabbits!']), 4);
+  errandStep('raid');
+}
+
+/* ============ explorer's guide ============ */
+// The first time you explore, a short guide joins you after a little while (once you've had a look round) and walks
+// through what explore mode has: the minimap, rivals, rumours, errands, cutting scenery, spirit trials and duels.
+// It shares the tutorial's card, pays once, and can be skipped or replayed from the pause menu.
+let guide = null;
+const GUIDE_COINS = 100, GUIDE_DELAY = 12;
+const gflag = k => { if (guide) guide.flags[k] = true; };
+function guideRival() {   // make sure there's a rival close by to try things on
+  if (npcs.some(e => !e.npc.yieldT && Math.hypot(e.x - player.pos.x, e.z - player.pos.z) < 18)) return;
+  const q = openSpot(player.pos.x, player.pos.z, 5, 8, ahead(), true) || openSpot(player.pos.x, player.pos.z, 5, 8, ahead()); if (q) makeNPC(q.x, q.z);
+}
+const GUIDE_STEPS = [
+  { t: 'Into the wilds', d: 'Beyond the arena lies a whole land to roam. Head out through a gate to the white marker. The minimap (top right) shows the land, hidden charms (gold) and other ninjas (blue).',
+    init: () => { guide.goal = openSpot(0, 0, world.wallR + 8, world.wallR + 14, ahead(), true) || openSpot(player.pos.x, player.pos.z, world.wallR + 8, world.wallR + 16, undefined, true); },
+    check: () => { const l = world.local(player.pos), G = guide.goal; return Math.hypot(l.x, l.z) > world.wallR + 5 && (!G || Math.hypot(G.x - player.pos.x, G.z - player.pos.z) < 4 || guide.dist > 40); } },
+  { t: 'Meet a rival', d: () => sdk.touch ? 'Walk up to a ninja and tap Talk.' : 'Walk up to a ninja and press {KeyT} to talk.', init: guideRival, check: () => guide.flags.talk },
+  { t: 'Rumours', d: 'Ask "Heard any rumours?" A gold marker then points to that charm. Charms add up to permanent blessings: extra hearts, faster Storm, more coins.', init: guideRival, check: () => guide.flags.rumour },
+  { t: 'Errands', d: 'Ask "Need a hand?" for an errand: cut scenery, win a duel, find a charm or finish a spirit trial. It shows under your hearts and pays coins when done.',
+    init: guideRival, check: () => guide.flags.errand },
+  { t: 'Cut anything', d: 'Out here your blade cuts the world itself. Slice a tree, a lantern or a fence.', check: () => guide.flags.prop },
+  { t: 'Spirit trial', d: 'A spirit is waiting (follow the cyan marker). Touch it and spirit warriors rise round you: cut them all down before time runs out.',
+    init: () => { if (!trialRun) spawnWisp(7, 10); }, check: () => guide.flags.trial },
+  { t: 'Towns', d: () => `Every map has a town: follow the white marker. Talk to townsfolk (${sdk.touch ? 'tap Talk' : 'press {KeyT}'}). The merchant sells tea, talismans and charm maps, and the elder at the bounty board needs help against bandit raids.`,
+    init: () => { const tw = townAt(); if (tw) guide.goal = { x: tw.x, z: tw.z }; }, check: () => { const tw = townAt(); return !tw || Math.hypot(player.pos.x - tw.x, player.pos.z - tw.z) < tw.r; } },
+  { t: 'Duels', d: () => (sdk.touch ? 'Tap Duel' : 'Press {KeyR}') + ' next to a ninja to challenge them, and see the duel through. Duels are never to the death, and a win pays coins by rank.',
+    init: guideRival, check: () => guide.flags.duel },
+];
+const guideText = st => keyText(typeof st.d === 'function' ? st.d() : st.d);
+function startGuide() {
+  if (!stage || !stage.explore || guide) return;
+  guide = { i: -1 }; nextGuideStep();
+  $('tutSkip').textContent = 'Skip guide'; $('tutBox').classList.remove('hidden');
+}
+function nextGuideStep() {
+  if (!guide) return;
+  if (++guide.i >= GUIDE_STEPS.length) { endGuide(true); return; }
+  Object.assign(guide, { flags: {}, done: false, dist: 0, last: player.pos.clone(), goal: null });
+  const st = GUIDE_STEPS[guide.i]; if (st.init) st.init();
+  $('tutStep').textContent = `EXPLORER'S GUIDE · ${guide.i + 1} / ${GUIDE_STEPS.length}`;
+  $('tutTitle').textContent = st.t; $('tutText').textContent = guideText(st);
+  $('tutSkipKey').textContent = sdk.touch ? '' : keyText(' · {KeyP} = pause / skip');
+  $('tutBox').classList.remove('done');
+}
+function updGuide() {
+  if (!guide || guide.done) return;
+  guide.dist += Math.hypot(player.pos.x - guide.last.x, player.pos.z - guide.last.z); guide.last.copy(player.pos);
+  if (GUIDE_STEPS[guide.i].check()) { guide.done = true; $('tutBox').classList.add('done'); sfx.coin(); after(1.0, nextGuideStep); }
+}
+function endGuide(done) {
+  if (!guide) return;
+  const first = done && !save.exGuide; guide = null;
+  save.exGuide = true; if (first) save.coins += GUIDE_COINS; persist();
+  $('tutBox').classList.add('hidden'); $('tutSkip').textContent = 'Skip tutorial';
+  if (done) { banner('GUIDE COMPLETE', first ? `+${GUIDE_COINS} COINS` : 'HAPPY TRAVELS'); sfx.win(); }
+  if (stage.fromTut) {   // the first-time path goes on to stage 1; explore stays open from the menu
+    stage.fromTut = false; after(done ? 3 : 0.5, () => { if (stage.explore && state === 'play') { bankRunCoins(); playStage(1, false); } });
+  }
 }
 
 /* ============ tutorial ============ */
@@ -2256,9 +2840,9 @@ function startTutorial() {
   clearField();
   stage = { n: 0, tutorial: true, boss: false, queue: [], total: TUT_STEPS.length, theme: 2, speedMul: 1, map: 'shrine' };
   world.setExplore(false); world.setMap('shrine'); world.setTheme(2); $('minimap').classList.add('hidden');
-  maxHearts = 5 + save.hearts + CH().hearts; hearts = maxHearts;
+  maxHearts = heartsMax(); hearts = maxHearts;
   score = 0; runCoins = 0; comboN = 0; ult = 0; invuln = 0;
-  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0 };
+  stats = { kills: 0, maxCombo: 0, dmg: 0, air: 0, counters: 0, perfect: 0, clean: 0 };
   killedCounted = 0; revived = false; bossE = null; strokeKills.clear(); timeScale = 1; slowT = 0;
   player.pos.set(0, 0, 4); player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.06; player.dashT = player.dashCD = 0; player.y = player.vy = player.flip = 0; player.ground = true;
   trial = null; cur = 'katana';
@@ -2322,7 +2906,7 @@ const TOUR = [
   { sel: '#wdBuy', t: 'Unlock & upgrade', d: 'Spend coins here. Each level costs more than the last.' },
   { sel: '#wdTry', t: 'Free trial', d: 'Short on coins? Watch an ad to take a locked weapon into your next stage for free.', skip: () => $('wdTry').classList.contains('hidden') },
   { sel: '.wCard[data-id="vitality"]', t: 'Vitality', d: 'Adds one extra heart per level, up to 9 hearts. More hearts means more mistakes allowed.', pre: () => pick('vitality') },
-  { sel: null, t: 'In battle', d: 'Every weapon you own is ready in every fight: switch with 1-5, the mouse wheel or the weapon bar. Mix them up!' },
+  { sel: null, t: 'In battle', d: 'Every weapon you own is ready in every fight: switch with 1-6, the mouse wheel or the weapon bar. Mix them up!' },
 ];
 let tourI = -1, tourFromTut = false;
 function startTour(fromTut) { tourFromTut = fromTut; tourI = -1; $('tour').classList.remove('hidden'); nextTour(); }
@@ -2354,7 +2938,7 @@ function placeTour() {
 function endTour() {
   $('tour').classList.add('hidden');
   save.shopTour = true; persist();
-  if (tourFromTut) { tourFromTut = false; vmMode = 'hand'; playStage(1, false); }
+  if (tourFromTut) { tourFromTut = false; vmMode = 'hand'; if (save.exGuide) playStage(1, false); else startExplore(stageMap(1), true); }   // first time: the explorer's guide comes before stage 1
 }
 click('tourNext', nextTour);
 click('tourSkip', () => { tourFromTut = false; endTour(); });
@@ -2474,7 +3058,7 @@ function step(rdt, now, draw = true) {
     updEnemies(dt); updPProj(dt); updEProj(dt); updFling(dt);
     updHUD();
   }
-  animHero(dt);
+  animHero(dt); updHeroTails(dt);
   phys.update(dt); fx.update(dt); world.update(dt, T, camera.position);
   // camera
   shake = Math.max(0, shake - rdt * 2.2);
@@ -2526,7 +3110,7 @@ function step(rdt, now, draw = true) {
   if (DEV && QS.has('dbg')) { dbgDraw = `dc=${renderer.info.render.calls} tri=${(renderer.info.render.triangles / 1000).toFixed(0)}k geo=${renderer.info.memory.geometries} prog=${renderer.info.programs.length}`; renderer.info.reset(); }
   tuneRes(rawDt);
   drawTrail(performance.now());
-  drawThreats(); drawMinimap(); drawNPCTags();
+  drawThreats(); drawMinimap(); drawNPCTags(); drawMarkers();
   if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `${dbgDraw} ${quality} f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
 }
 
@@ -2538,7 +3122,6 @@ async function boot() {
   sdk.onAdUI = updAdUI;
   sdk.onAuth = () => { loadSave(); if (state === 'menu') updMenu(); updCoins(); };
   loadSave();
-  if (DEV && QS.get('style')) save.style = QS.get('style');   // dev: &style=ink|real
   quality = save.q || (sdk.touch || integratedGPU() ? 'low' : 'high');
   document.body.classList.toggle('touch', sdk.touch);
   if (sdk.touch) $('menuHint').innerHTML = 'Left thumb: move &amp; turn · Right side: swipe to slice<br>Tap to throw · JUMP twice to flip · DASH to dodge · STORM when charged';
@@ -2550,12 +3133,12 @@ async function boot() {
   setupRenderer();
   await new Promise(r => setTimeout(r, 30));
   world = buildWorld(scene, renderer, quality);
-  if (DEV) window.__dev = { scene, renderer, camera };   // dev: poke at the scene from the console
-  world.style = save.style; world.setStyle(save.style); world.setMap(stageMap(save.sel));
+  if (DEV) window.__dev = { scene, renderer, camera, get hero() { return hero; }, tails: heroTails };   // dev: poke at the scene from the console
+  world.setMap(stageMap(save.sel));
   fx = makeFX(scene); fx.blood = save.blood;
   phys = makePhysics(scene, fx, sfx, world);
   await loadBody('models/body.glb');
-  setModelStyle(save.style); document.body.classList.toggle('ink', save.style === 'ink');
+  delete save.style;   // the ink look is gone; old saves drop the setting
   for (const k of Object.keys(EDEF)) templates[k] = batchParts(buildEnemy(k));   // fewer draw calls per enemy
   buildViewmodel(); buildFling(); buildHero(); chShown = save.char;
   applyQuality();
@@ -2592,6 +3175,9 @@ async function boot() {
   if (test === 'explore') { startExplore(QS.get('map') || 'shrine'); if (QS.get('at')) { const [x, z] = QS.get('at').split(',').map(Number); player.pos.set(x, 0, z); } }   // dev: ?test=explore&map=castle&at=x,z
   if (test === 'explore' && QS.get('slash')) for (let k = 0; k < +QS.get('slash'); k++) after(1 + k * 0.5, () => { const f = k % 2 ? -1 : 1, x0 = vw * 0.5 - vw * 0.2 * f, y0 = vh * 0.3, x1 = vw * 0.5 + vw * 0.2 * f, y1 = vh * 0.7; stroke++; sliceSeg([x0, y0, x1, y1], x0, y0, x1, y1, +(QS.get('range') || 6), 1, stroke, 'katana'); });   // dev: &slash=N cuts through the screen centre
   if (DEV && QS.get('yaw')) after(0.1, () => { player.yaw = +QS.get('yaw'); });
+  if (test === 'explore' && (QS.has('time') || QS.has('wx'))) { if (QS.has('time')) dayT = +QS.get('time'); if (QS.has('wx')) wx = { from: QS.get('wx'), to: QS.get('wx'), k: 1, t: 999 }; skyAcc = envAcc = 9; }   // dev: &time=0..1 (0 dawn, .25 day, .5 dusk, .75 night), &wx=rain|storm|fog|cloudy
+  if (test === 'explore' && QS.has('raid')) after(1, () => startRaid(townAt()));   // dev: &raid starts a bandit raid on the nearest town
+  if (test === 'explore' && QS.has('wisp')) after(0.5, () => { spawnWisp(1, 1.2); if (QS.has('errand')) errand = { kind: 'trial', need: 1, got: 0, text: 'Finish a spirit trial', reward: 70, name: 'Kenji' }; });   // dev: &wisp starts a spirit trial (&errand with a trial errand)
   if (test === 'explore' && (QS.has('talk') || QS.has('duel'))) after(0.5, () => { const e = makeNPC(player.pos.x, player.pos.z - 2.6); QS.has('talk') ? talk(e) : challenge(e); });   // dev: &talk / &duel
   if (test === 'tutorial') { startTutorial(); if (QS.get('tstep')) { tut.i = +QS.get('tstep') - 2; nextTutStep(); } }
   if (test === 'tour') { $('arsenalBtn').click(); startTour(false); for (let i = 0; i < +(QS.get('tour') || 0); i++) nextTour(); }

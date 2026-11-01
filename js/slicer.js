@@ -1,6 +1,7 @@
 // Real-time mesh slicing: cuts non-indexed (position, normal, color[, uv]) geometry by a plane and caps the hole.
 // Textured geometry (with uv) keeps its texture; its caps become separate untextured meshes.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const MATS = {
   body: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.02 }),
@@ -105,11 +106,9 @@ function addCap(out, pts, n, col, facing) {
   const inner = p => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k, cz + (p[2] - cz) * k];
   const centre = V([cx, cy, cz], I, 0.85);
   const tri = (a, b, c) => { if (facing > 0) { pushV(out, a); pushV(out, b); pushV(out, c); } else { pushV(out, a); pushV(out, c); pushV(out, b); } };
-  for (let i = 0; i < ring.length; i++) {
-    const p0 = ring[i], p1 = ring[(i + 1) % ring.length], q0 = inner(p0), q1 = inner(p1);
-    tri(centre, V(q0, I), V(q1, I));                                   // inner disc
-    tri(V(q0, R, 0.62), V(p0, R), V(p1, R)); tri(V(q0, R, 0.62), V(p1, R), V(q1, R, 0.62));   // rim, darker toward the middle
-  }
+  // one fan triangle per ring edge, the colour running from the inner colour in the middle to the rim at the
+  // edge (a separate inner disc and rim tripled the cap's triangles, and every later cut carried them along)
+  for (let i = 0; i < ring.length; i++) tri(centre, V(ring[i], R), V(ring[(i + 1) % ring.length], R));
 }
 function toGeo(o, uv) {
   if (o.p.length < 9) return null;
@@ -164,13 +163,32 @@ export function clipGeo(geo, plane, capCol) {
 
 // --- chunks -----------------------------------------------------------------
 // A chunk is a Group of meshes whose geometry is expressed in the group's local space.
+// Items sharing a material, cap kind and attribute layout are merged into one geometry, so a piece stays a few
+// draw calls however many times it (and the pieces before it) were cut.
+function mergeItems(items) {
+  const by = new Map();
+  for (const it of items) {
+    const k = it.mat.uuid + '|' + it.cap + '|' + Object.keys(it.geo.attributes).sort().join(',');
+    let a = by.get(k); if (!a) by.set(k, a = []); a.push(it);
+  }
+  const out = [];
+  for (const list of by.values()) {
+    if (list.length === 1) { out.push(list[0]); continue; }
+    const geos = list.map(it => it.geo.index ? it.geo.toNonIndexed() : it.geo);
+    const g = mergeGeometries(geos, false);
+    if (!g) { out.push(...list); continue; }
+    for (const x of geos) x.dispose(); for (const it of list) it.geo.dispose();
+    out.push({ geo: g, mat: list[0].mat, cap: list[0].cap });
+  }
+  return out;
+}
 const _box = new THREE.Box3(), _ctr = new THREE.Vector3();
 function makeChunk(items, refMatrixWorld) {
   _box.makeEmpty();
   for (const it of items) { it.geo.computeBoundingBox(); _box.union(it.geo.boundingBox); }
   _box.getCenter(_ctr);
   const grp = new THREE.Group();
-  for (const it of items) {
+  for (const it of mergeItems(items)) {
     it.geo.translate(-_ctr.x, -_ctr.y, -_ctr.z);
     it.geo.computeBoundingSphere();
     const m = new THREE.Mesh(it.geo, it.mat);

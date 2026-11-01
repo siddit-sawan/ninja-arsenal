@@ -11,24 +11,7 @@ function at(m, x, y, z, rx = 0, ry = 0, rz = 0, name) { m.position.set(x, y, z);
 function pivot(name, x, y, z) { const g = new THREE.Group(); g.name = name; g.position.set(x, y, z); return g; }
 
 // ---------------------------------------------------------------- enemies
-const PAL_INK = {
-  // ink silhouettes: near-black bodies, one accent each, paper-white eye glints
-  grunt: { cloth: 0x161412, trim: 0x9c1a14, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x221f1c },
-  runner: { cloth: 0x1c1b1e, trim: 0x55504a, skin: 0x2a2622, eye: 0xf2e8d2, wrap: 0x2a282c },
-  archer: { cloth: 0x201e1b, trim: 0x6a5a42, skin: 0x2c2722, eye: 0xf2e8d2, wrap: 0x2a2620 },
-  samurai: { cloth: 0x1a1816, trim: 0x8a1812, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2e2a27 },
-  player: { cloth: 0x0f0e0e, trim: 0x2a2624, skin: 0x1e1b19, eye: 0xf6eedc, wrap: 0x1a1817 },
-  kage: { cloth: 0x0f0e0e, trim: 0x2a2624, skin: 0x1e1b19, eye: 0xf6eedc, wrap: 0x1a1817, ribbon: 0xb01e18 },
-  hana: { cloth: 0x16121a, trim: 0x7a3aa0, skin: 0x1e1a20, eye: 0xf6eedc, wrap: 0x221c28, ribbon: 0xe8dcc8 },
-  tetsu: { cloth: 0x1a1612, trim: 0x8a6a3a, skin: 0x221d18, eye: 0xf6eedc, wrap: 0x2a241c, ribbon: 0x6b4a22 },
-  raiden: { cloth: 0x120f0d, trim: 0xc8a040, skin: 0x1e1b19, eye: 0xffd27a, wrap: 0x1e1a16, ribbon: 0xc8a040 },
-  brute: { cloth: 0x1d1a17, trim: 0x6b4a22, skin: 0x2a2520, eye: 0xf2e8d2, wrap: 0x2b2622 },
-  assassin: { cloth: 0x141218, trim: 0x5b2a7a, skin: 0x221d26, eye: 0xd9b8ff, wrap: 0x221d29 },
-  shogun: { cloth: 0x18140f, trim: 0xb8902a, skin: 0x2a2520, eye: 0xffd27a, wrap: 0x2a2418 },
-  shadow: { cloth: 0x0a090c, trim: 0x6a2fb0, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x141218 },
-  shade: { cloth: 0x0c0b10, trim: 0x4a2380, skin: 0x0e0c12, eye: 0xb07cff, wrap: 0x16131c },
-};
-// realistic look: dyed indigo, hemp and lacquer garb, real skin tones
+// dyed indigo, hemp and lacquer garb, real skin tones
 const PAL_REAL = {
   grunt: { cloth: 0x27304a, trim: 0xa3241a, skin: 0xc49373, eye: 0xf2ece4, wrap: 0x353d52 },
   runner: { cloth: 0x3b3d42, trim: 0x6e6a60, skin: 0xbd8c6c, eye: 0xf2ece4, wrap: 0x4a4c52 },
@@ -45,8 +28,7 @@ const PAL_REAL = {
   shadow: { cloth: 0x15121c, trim: 0x7b40c2, skin: 0x2c2636, eye: 0xb07cff, wrap: 0x1f1a28 },
   shade: { cloth: 0x1a1621, trim: 0x5b2c92, skin: 0x2c2636, eye: 0xb07cff, wrap: 0x221d2c },
 };
-let PAL = PAL_REAL;
-export function setModelStyle(style) { PAL = style === 'ink' ? PAL_INK : PAL_REAL; }
+const PAL = PAL_REAL;
 
 function blade(len, w, curve = 0.05) {
   const s = new THREE.Shape();
@@ -92,10 +74,11 @@ function ninja(kind) {
   const hips = root.getObjectByName('hips'), torso = root.getObjectByName('torso'), head = root.getObjectByName('head');
   hips.add(at(part(cyl(1, 1, 1, 24).scale(0.262, 0.075, 0.2), c.trim), 0, 0.06, 0.0));                // obi sash
   hips.add(at(part(sph(0.05).scale(1.5, 0.9, 0.6), c.trim), 0.05, 0.06, -0.22));                          // obi knot
-  for (const sx of [-1, 1]) hips.add(at(part(box(0.045, 0.18, 0.014), c.trim), 0.03 + sx * 0.03, -0.04, -0.225, 0.25, 0, sx * 0.12));   // knot tails
+  const knot = pivot('knot', 0.03, -0.04, -0.225); hips.add(knot);   // the hero swaps these for cloth tails (cloth.js)
+  for (const sx of [-1, 1]) knot.add(at(part(box(0.045, 0.18, 0.014), c.trim), sx * 0.03, 0, 0, 0.25, 0, sx * 0.12));   // knot tails
   for (const sx of [-1, 1]) torso.add(at(part(box(0.04, 0.26, 0.016), c.wrap), sx * 0.04, 0.2, 0.165, -0.18, 0, sx * 0.4));        // crossed kimono collar
   for (const sx of [-1, 1]) head.add(at(part(sph(0.015, 10, 8).scale(1.7, 0.7, 0.6), c.eye, 'glow'), sx * 0.034, 0.17, 0.165));  // eye glints
-  head.add(at(part(cyl(1, 1, 1, 28).scale(0.098, 0.034, 0.118), c.trim), 0, 0.225, 0.048));               // headband
+  head.add(at(part(cyl(1, 1, 1, 28).scale(0.101, 0.052, 0.121), c.trim), 0, 0.225, 0.048));               // headband (a thick, folded band)
   head.add(at(part(box(0.04, 0.26, 0.012), c.trim), 0.04, 0.12, -0.075, 0.35, 0, 0.25));                // headband tails
   head.add(at(part(box(0.04, 0.22, 0.012), c.trim), -0.025, 0.12, -0.08, 0.45, 0, -0.15));
   return root;
@@ -114,6 +97,7 @@ export function buildEnemy(kind) {
   if (kind === 'oni') return buildOni();
   if (kind === 'dummy') return buildDummy();
   if (kind === 'player') return buildPlayer('kage');
+  if (kind.startsWith('citizen')) return buildCitizen(+kind.slice(7));
   root = ninja(kind);
   const handR = root.getObjectByName('handR'), handL = root.getObjectByName('handL');
   if (kind === 'grunt') {
@@ -196,7 +180,7 @@ export function buildPlayer(id = 'kage') {
   const r = ninja(PAL[id] ? id : 'kage'), head = r.getObjectByName('head'), torso = r.getObjectByName('torso'), c = PAL[id] || PAL.kage;
   const rib = pivot('ribbon', 0, 0.225, -0.075); head.add(rib);                                         // flowing headband / scarf tails
   const ribLen = id === 'hana' ? 1.0 : id === 'tetsu' ? 0.5 : 0.85;
-  for (const sx of [-1, 1]) rib.add(at(part(box(id === 'hana' ? 0.05 : 0.034, ribLen, 0.008).translate(0, -ribLen / 2, 0), c.ribbon), sx * 0.035, 0, 0, 0, sx * 0.15, sx * 0.16));
+  for (const sx of [-1, 1]) rib.add(at(part(box(id === 'hana' ? 0.065 : 0.052, ribLen, 0.012).translate(0, -ribLen / 2, 0), c.ribbon), sx * 0.035, 0, 0, 0, sx * 0.15, sx * 0.16));
   torso.add(at(part(cyl(0.022, 0.026, 0.9, 12), 0x0c0b0a, 'body', 'wood'), -0.06, 0.24, -0.25, 0, 0, 0.78));   // scabbard across the back
   torso.add(at(part(cyl(0.05, 0.05, 0.015, 16), c.trim, 'metal', 'metal'), 0.22, 0.52, -0.25, 0, 0, 0.78));
   if (id === 'kage') head.add(at(part(sph(0.045).scale(1, 1.35, 1), 0x0e0d0c), 0, 0.31, -0.04, -0.5, 0, 0));   // topknot
@@ -240,6 +224,18 @@ function buildOni() {
 }
 
 // straw training dummy for the tutorial
+// Townsfolk (explore): dyed kimono, a sash, and a woven straw kasa hat; four looks
+const CITIZEN = [
+  { cloth: 0x7a4a3a, sash: 0xd8c8a0, hat: 0xc8a868 }, { cloth: 0x3e5a6e, sash: 0xa8322a, hat: 0xb89858 },
+  { cloth: 0x6a6a4a, sash: 0x2a2a2a, hat: 0xd0b070 }, { cloth: 0x8a5a7a, sash: 0xe8dcc0, hat: 0xc09a60 }];
+function buildCitizen(i) {
+  const c = CITIZEN[i % CITIZEN.length], root = rigSkeleton({ surface: c.cloth, joints: c.sash });
+  const hips = root.getObjectByName('hips'), head = root.getObjectByName('head');
+  hips.add(at(part(cyl(1, 1, 1, 24).scale(0.262, 0.09, 0.2), c.sash), 0, 0.06, 0.0));                  // sash
+  head.add(at(part(new THREE.ConeGeometry(0.3, 0.17, 18), c.hat), 0, 0.33, 0.04));                       // kasa hat
+  head.add(at(part(cyl(0.3, 0.3, 0.012, 18), c.hat), 0, 0.245, 0.04));
+  return root;
+}
 function buildDummy() {
   const root = new THREE.Group(), straw = 0xd8b45a, rope = 0x6b4a22, wood = 0x5a3a1e;
   root.add(at(part(cyl(0.06, 0.07, 1.0, 7), wood, 'body', 'wood'), 0, 0.5, 0));
@@ -361,10 +357,22 @@ function naginata() {
   return w;
 }
 
+// hōroku: a round clay bomb bound in rope, with a short smouldering fuse
+export function horokuMesh() {
+  mats();
+  const g = new THREE.Group();
+  g.add(mesh(new THREE.SphereGeometry(0.075, 16, 12), new THREE.MeshStandardMaterial({ color: 0x3a2a20, roughness: 0.9 })));
+  for (const a of [0, Math.PI / 2]) g.add(at(mesh(new THREE.TorusGeometry(0.076, 0.006, 6, 24), wrapMat), 0, 0, 0, 0, a, 0));
+  g.add(at(mesh(cyl(0.022, 0.026, 0.03, 10), darkSteel), 0, 0.078, 0));
+  g.add(at(mesh(cyl(0.005, 0.005, 0.05, 6), woodMat), 0, 0.11, 0, 0.3, 0, 0));
+  g.add(at(mesh(new THREE.SphereGeometry(0.012, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa040, toneMapped: false })), 0.007, 0.135, 0));
+  return g;
+}
 export const WEAPON_MODELS = {
   katana, kusarigama, naginata,
   shuriken: () => { const s = shurikenMesh(); s.rotation.x = 0.4; return s; },
   kunai: () => { const k = kunaiMesh(); k.scale.setScalar(1.4); return k; },
+  horoku: () => { const b = horokuMesh(); b.scale.setScalar(1.3); return b; },
 };
 
 // first-person hand: sleeve + glove, grip at origin
@@ -384,6 +392,7 @@ export function weaponIconSVG(id) {
     kunai: '<path d="M12 2.5l3.2 8-3.2 3-3.2-3z" fill="currentColor" stroke-width="1"/><path d="M12 13.5v5" stroke-width="2.6"/><circle cx="12" cy="20.6" r="1.6" stroke-width="1.6"/>',
     kusarigama: '<path d="M6 19L15 7" stroke-width="2.6"/><path d="M15 7c3-2 6-1.6 7.4.2-2.6-.6-5 .2-6.6 1.8z" fill="currentColor" stroke-width="1"/><path d="M5.2 20.5c-1.6 1.2-2.8.8-3.4-.4" stroke-width="1.6" stroke-dasharray="1.6 1.4"/>',
     naginata: '<path d="M3 21L15.5 8.5" stroke-width="2.2"/><path d="M15.5 8.5C17 5.6 19.6 3.4 22 2.4c-.4 3-2.4 5.8-5 7.4z" fill="currentColor" stroke-width="1"/>',
+    horoku: '<circle cx="11" cy="14" r="7" fill="currentColor" stroke-width="1"/><path d="M14.5 7.5l2.5-2.5" stroke-width="2"/><path d="M18.5 3.5l1.2-1.2M19.6 5.6l1.6.2M17.4 2.2l-.2 1.4" stroke-width="1.4"/>',
     heart: '<path d="M12 21s-7.5-4.6-9.4-9.4C1.2 8 3.4 4.4 7 4.4c2 0 3.4 1 5 2.8 1.6-1.8 3-2.8 5-2.8 3.6 0 5.8 3.6 4.4 7.2C19.5 16.4 12 21 12 21z" fill="currentColor" stroke-width="1"/>',
     storm: '<path d="M3 17L17 3M7 21L21 7M2 10l8-8M14 22l8-8" stroke-width="2"/>',
   };

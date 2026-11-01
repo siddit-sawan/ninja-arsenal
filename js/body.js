@@ -40,6 +40,8 @@ function setup(scene) {
   SRC.updateMatrixWorld(true);
   if (wpos(bone(SRC, 'LeftToe_End')).z < wpos(bone(SRC, 'LeftFoot')).z) { SRC.rotation.y = Math.PI; SRC.updateMatrixWorld(true); }   // face +z like the game rig
   SRC.traverse(o => { if (o.isSkinnedMesh) thickenWaist(o); });
+  roundTrunk(SRC);
+  SRC.traverse(o => { if (o.isSkinnedMesh) roundLimbs(o, 0.9); });
   // rest pose: arms hang at the sides (model ships in a T-pose), hands closed into loose fists
   for (const [s, sx] of [['Left', 1], ['Right', -1]]) {
     const arm = bone(SRC, s + 'Arm'), dir = wpos(bone(SRC, s + 'ForeArm')).sub(wpos(arm)).normalize();
@@ -98,6 +100,99 @@ function thickenWaist(m) {
   }
   pos.needsUpdate = nor.needsUpdate = true;
   g.computeBoundingSphere();
+}
+
+// Round the trunk a little: each 4 cm slice from the hips up to the chest is blended part of the way toward a smooth
+// ellipse fitted to that same slice (same centre, width and depth), so boxy corners and flat panels soften while the
+// silhouette, proportions and anatomy stay. It fades out toward the shoulders and neck, which keep their exact shape.
+// The final slices are kept (RIG.trunk, metres at BODY_SCALE, model space at rest) as the body's real outline, for
+// cloth that must stay outside it.
+function roundTrunk(src) {
+  const meshes = []; src.traverse(o => { if (o.isSkinnedMesh) meshes.push(o); });
+  const trunkOf = m => new Set(['Hips', 'Spine', 'Spine1', 'Spine2'].map(n => m.skeleton.bones.indexOf(bone(SRC, n))));
+  const isTrunk = (m, T, i) => { const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight; let b = -1, bw = 0; for (let j = 0; j < 4; j++) if (sw.getComponent(i, j) > bw) { bw = sw.getComponent(i, j); b = si.getComponent(i, j); } return T.has(b); };
+  const y0 = wpos(bone(SRC, 'Hips')).y, y1 = wpos(bone(SRC, 'Spine2')).y, yN = wpos(bone(SRC, 'Neck')).y, S = 0.04, v = new V3(), n = new V3();
+  const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const measure = () => {   // x/z extents of the trunk per slice, over every skinned mesh
+    const rows = new Map();
+    for (const m of meshes) {
+      const pos = m.geometry.attributes.position, W = m.matrixWorld, T = trunkOf(m);
+      for (let i = 0; i < pos.count; i++) {
+        if (!isTrunk(m, T, i)) continue;
+        v.fromBufferAttribute(pos, i).applyMatrix4(W);
+        const k = Math.round(v.y / S); let r = rows.get(k); if (!r) rows.set(k, r = { xn: 9, xx: -9, zn: 9, zx: -9 });
+        r.xn = Math.min(r.xn, v.x); r.xx = Math.max(r.xx, v.x); r.zn = Math.min(r.zn, v.z); r.zx = Math.max(r.zx, v.z);
+      }
+    }
+    return rows;
+  };
+  const rows = measure();
+  for (const m of meshes) {
+    const g = m.geometry, pos = g.attributes.position, nor = g.attributes.normal, W = m.matrixWorld, inv = W.clone().invert(), T = trunkOf(m);
+    for (let i = 0; i < pos.count; i++) {
+      if (!isTrunk(m, T, i)) continue;
+      v.fromBufferAttribute(pos, i).applyMatrix4(W);
+      const f = 0.75 * ss(y0 - 0.14, y0 - 0.02, v.y) * (1 - ss(y1 + 0.03, yN - 0.02, v.y));
+      const r = rows.get(Math.round(v.y / S)); if (f <= 0 || !r) continue;
+      const xc = (r.xx + r.xn) / 2, zc = (r.zx + r.zn) / 2, a = (r.xx - r.xn) / 2, b = (r.zx - r.zn) / 2;
+      if (a < 0.03 || b < 0.03 || Math.abs(v.x - xc) > a + 0.01) continue;
+      const th = Math.atan2((v.z - zc) / b, (v.x - xc) / a), c = Math.cos(th), s = Math.sin(th);
+      v.x += (xc + a * c - v.x) * f; v.z += (zc + b * s - v.z) * f;
+      pos.setXYZ(i, ...v.applyMatrix4(inv).toArray());
+      n.fromBufferAttribute(nor, i).transformDirection(W);   // lean the normal toward the ellipse's, keeping its slope
+      const ex = c / a, ez = s / b, el = Math.hypot(ex, ez), h = Math.hypot(n.x, n.z);
+      n.x += (ex / el * h - n.x) * f; n.z += (ez / el * h - n.z) * f; n.normalize().transformDirection(inv);
+      nor.setXYZ(i, n.x, n.y, n.z);
+    }
+    pos.needsUpdate = nor.needsUpdate = true; g.computeBoundingSphere();
+  }
+  const out = [];
+  for (const [k, r] of measure()) if (k * S >= y0 - 0.2 && k * S <= yN) out.push({ y: k * S * BODY_SCALE, xc: (r.xx + r.xn) / 2 * BODY_SCALE, zc: (r.zx + r.zn) / 2 * BODY_SCALE, a: (r.xx - r.xn) / 2 * BODY_SCALE, b: (r.zx - r.zn) / 2 * BODY_SCALE });
+  RIG.trunk = out.sort((p, q) => p.y - q.y);
+}
+
+// Round the limbs the same way: upper arms, forearms, thighs and shins are sliced every 3 cm across the bone's axis,
+// and each slice is blended toward the ellipse fitted to it (same centre, width and depth), so flat panels and creases
+// smooth into clean rounded tubes while the silhouette stays. It fades out toward the joints (shoulders, elbows,
+// wrists, hips, knees, ankles), where neighbouring parts meet and keep their exact shape, so no seam opens.
+const LIMBS = [   // [bone, child bone, fade in, fade out] as fractions of the bone's length
+  ['Arm', 'ForeArm', 0.06, 0.88], ['ForeArm', 'Hand', 0.1, 0.9], ['UpLeg', 'Leg', 0.14, 0.9], ['Leg', 'Foot', 0.1, 0.88], ['Head', 'HeadTop_End', 0.12, 0.9]];
+function roundLimbs(m, F) {
+  const g = m.geometry, pos = g.attributes.position, nor = g.attributes.normal, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+  const W = m.matrixWorld, inv = W.clone().invert(), v = new V3(), n = new V3(), r = new V3(), S = 0.03;
+  const top = i => { let b = -1, bw = 0; for (let j = 0; j < 4; j++) if (sw.getComponent(i, j) > bw) { bw = sw.getComponent(i, j); b = si.getComponent(i, j); } return b; };
+  const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const owner = Array.from({ length: pos.count }, (_, i) => top(i));
+  for (const s of ['Left', 'Right']) for (const [bn, cn, f0, f1] of LIMBS) {
+    const b = bone(SRC, s + bn), c = bone(SRC, s + cn), bi = m.skeleton.bones.indexOf(b); if (bi < 0 || !c) continue;
+    const A = wpos(b), d = wpos(c).sub(A), L = d.length(); d.normalize();
+    const u = (Math.abs(d.y) < 0.9 ? new V3(0, 1, 0) : new V3(0, 0, 1)).addScaledVector(d, -(Math.abs(d.y) < 0.9 ? d.y : d.z)).normalize(), w = new V3().crossVectors(d, u);
+    const ids = [], rows = new Map();
+    for (let i = 0; i < pos.count; i++) {
+      if (owner[i] !== bi) continue;
+      v.fromBufferAttribute(pos, i).applyMatrix4(W).sub(A);
+      const t = v.dot(d), x = v.dot(u), y = v.dot(w), k = Math.round(t / S);
+      let row = rows.get(k); if (!row) rows.set(k, row = { xn: 9, xx: -9, yn: 9, yx: -9 });
+      row.xn = Math.min(row.xn, x); row.xx = Math.max(row.xx, x); row.yn = Math.min(row.yn, y); row.yx = Math.max(row.yx, y);
+      ids.push([i, t, x, y]);
+    }
+    for (const [i, t, x, y] of ids) {
+      const f = F * ss(f0 - 0.1, f0 + 0.08, t / L) * (1 - ss(f1 - 0.08, f1 + 0.08, t / L)), row = rows.get(Math.round(t / S));
+      if (f <= 0 || !row) continue;
+      const xc = (row.xx + row.xn) / 2, yc = (row.yx + row.yn) / 2, a = (row.xx - row.xn) / 2, e = (row.yx - row.yn) / 2;
+      if (a < 0.015 || e < 0.015) continue;
+      const th = Math.atan2((y - yc) / e, (x - xc) / a), co = Math.cos(th), sn = Math.sin(th);
+      const nx = x + (xc + a * co - x) * f, ny = y + (yc + e * sn - y) * f;
+      v.copy(A).addScaledVector(d, t).addScaledVector(u, nx).addScaledVector(w, ny);
+      pos.setXYZ(i, ...v.applyMatrix4(inv).toArray());
+      n.fromBufferAttribute(nor, i).transformDirection(W);   // lean the normal toward the ellipse's, keeping its slope along the bone
+      const along = n.dot(d), pu = n.dot(u), pw = n.dot(w), h = Math.hypot(pu, pw), ex = co / a, ey = sn / e, el = Math.hypot(ex, ey);
+      r.copy(d).multiplyScalar(along).addScaledVector(u, pu + (ex / el * h - pu) * f).addScaledVector(w, pw + (ey / el * h - pw) * f);
+      n.copy(r).normalize().transformDirection(inv);
+      nor.setXYZ(i, n.x, n.y, n.z);
+    }
+  }
+  pos.needsUpdate = nor.needsUpdate = true; g.computeBoundingSphere();
 }
 
 const matCache = new Map();

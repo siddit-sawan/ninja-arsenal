@@ -1,5 +1,5 @@
 // Environment: a shared sky, sun, fog and falling particles, plus five hand-laid maps (MAPS) rebuilt on demand.
-// Two looks: 'real' (natural colour, lit by a sun and a cloudy sky) and 'ink' (the original sumi-e ink on parchment).
+// Realistic look: natural colour, lit by a sun and a cloudy sky.
 // Every map has a round fighting arena (enemies come in through its gates) inside a square tile that repeats
 // forever in every direction. Only real things block you: each wall segment, house, rock, trunk and post has its own
 // collider (low ones can be jumped), and water can be waded. In explore mode every prop can be cut (W.cutProp).
@@ -16,28 +16,36 @@ function rng(seed) {
 const TAU = Math.PI * 2;
 const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
-// ---------- themes (time of day): the same four slots in both looks
-export const THEMES_INK = [
-  { name: 'Red Dawn', top: 0xd8caa8, mid: 0xefe3c6, bot: 0xd6c8aa, sun: 0xc0261c, sunDir: [-0.4, 0.2, -1], sunSize: 55, fog: 0xe9dcbe, fogD: 0.02,
-    light: 0xfff4e2, li: 1.5, hemiS: 0xfff6e6, hemiG: 0xb9ab8e, hi: 1.55, lantern: 0.35, stars: 0, exposure: 1.0, petals: 0x2a221c, blossom: 0x3a302a, ink: 0x26211c },
-  { name: 'Moon Ink', top: 0xa29b8b, mid: 0xcbc3ae, bot: 0x948d7e, sun: 0xf6f0e0, sunDir: [0.4, 0.3, -1], sunSize: 75, fog: 0xbdb5a2, fogD: 0.022,
-    light: 0xe9e6de, li: 1.0, hemiS: 0xe6e0d2, hemiG: 0x77705f, hi: 1.25, lantern: 1.0, stars: 0, exposure: 1.0, petals: 0x1a1816, blossom: 0x2e2a26, ink: 0x1d1a17, moon: true },
-  { name: 'Sakura Scroll', top: 0xe4d0c0, mid: 0xf2e4d3, bot: 0xd6c4b2, sun: 0xb5302a, sunDir: [0.5, 0.26, -1], sunSize: 40, fog: 0xecdcc9, fogD: 0.019,
-    light: 0xfff2e6, li: 1.5, hemiS: 0xfff3ea, hemiG: 0xbca893, hi: 1.55, lantern: 0.3, stars: 0, exposure: 1.0, petals: 0xb8505c, blossom: 0xc98a90, ink: 0x2a221e },
-  { name: 'Blood Moon', top: 0xc6a585, mid: 0xe0c6a0, bot: 0xb39575, sun: 0xa8121a, sunDir: [-0.2, 0.28, -1], sunSize: 30, fog: 0xd8bb98, fogD: 0.021,
-    light: 0xffe6d0, li: 1.4, hemiS: 0xffe8d4, hemiG: 0x9a7c60, hi: 1.45, lantern: 0.9, stars: 0, exposure: 1.0, petals: 0x7a0a0e, blossom: 0x5a1a18, ink: 0x2a1c18, moon: false },
-];
+// ---------- themes (time of day)
 // real: top = zenith, mid = horizon, bot = haze below the horizon; clouds = cover 0..1 and their colour
 export const THEMES_REAL = [
   { name: 'Golden Dawn', top: 0x5b8cc8, mid: 0xf2c49a, bot: 0xb7a48c, sun: 0xffe2b0, sunDir: [-0.45, 0.14, -1], sunSize: 160, fog: 0xe3c4a4, fogD: 0.0075,
     light: 0xffd2a0, li: 2.6, hemiS: 0xb9cdea, hemiG: 0x6b5a40, hi: 0.95, lantern: 0.45, stars: 0, exposure: 1.0, clouds: 0.5, cloud: 0xffd9bc, blossom: 0xf1a9bd },
-  { name: 'Moonlit Night', top: 0x07101f, mid: 0x223049, bot: 0x151b26, sun: 0xdfe7f6, sunDir: [0.4, 0.34, -1], sunSize: 260, fog: 0x18202f, fogD: 0.013,
-    light: 0x9db3e2, li: 1.05, hemiS: 0x4a5c88, hemiG: 0x1c1e28, hi: 0.85, lantern: 1.25, stars: 1, exposure: 1.15, clouds: 0.3, cloud: 0x34405a, blossom: 0xa07888, moon: true },
+  { name: 'Moonlit Night', top: 0x0a1528, mid: 0x2e3f5e, bot: 0x1c2433, sun: 0xdfe7f6, sunDir: [0.4, 0.34, -1], sunSize: 260, fog: 0x2a3650, fogD: 0.0075,
+    light: 0xb4c6ee, li: 1.7, hemiS: 0x7088bc, hemiG: 0x30364a, hi: 1.35, lantern: 1.25, stars: 1, exposure: 1.45, clouds: 0.3, cloud: 0x34405a, blossom: 0xa07888, moon: true },
   { name: 'Spring Day', top: 0x3f7fd0, mid: 0xcbe0f2, bot: 0xa8b4a0, sun: 0xfffbf0, sunDir: [0.5, 0.6, -1], sunSize: 200, fog: 0xc9d8e6, fogD: 0.0055,
     light: 0xfff4e4, li: 3.0, hemiS: 0xcfe2ff, hemiG: 0x7a6a4a, hi: 1.05, lantern: 0.15, stars: 0, exposure: 1.0, clouds: 0.6, cloud: 0xffffff, blossom: 0xf6b8c8 },
-  { name: 'Blood Moon', top: 0x160606, mid: 0x6a2216, bot: 0x2a1410, sun: 0xd0301c, sunDir: [-0.2, 0.3, -1], sunSize: 150, fog: 0x3a1a12, fogD: 0.011,
-    light: 0xff8a66, li: 1.2, hemiS: 0x6a3028, hemiG: 0x201010, hi: 0.6, lantern: 1.15, stars: 0.6, exposure: 1.1, clouds: 0.35, cloud: 0x5a2018, blossom: 0xb06070, moon: true },
+  { name: 'Blood Moon', top: 0x1e0808, mid: 0x7a2c1c, bot: 0x3a1c16, sun: 0xd0301c, sunDir: [-0.2, 0.3, -1], sunSize: 150, fog: 0x4e261a, fogD: 0.0072,
+    light: 0xffa080, li: 1.9, hemiS: 0x9a5848, hemiG: 0x3a2420, hi: 1.2, lantern: 1.15, stars: 0.6, exposure: 1.4, clouds: 0.35, cloud: 0x5a2018, blossom: 0xb06070, moon: true },
 ];
+// Explore's day: dawn, day, dusk (the dawn colours with the sun setting on the other side) and night, blended smoothly
+export const DUSK = { ...THEMES_REAL[0], name: 'Dusk', sunDir: [0.5, 0.12, -1], light: 0xffb888, mid: 0xf0a878, cloud: 0xffc0a0, fog: 0xd8a888 };
+// Weather (explore): extra cloud, fog, how much the light dims, and rain (snow on the snowy map)
+export const WEATHER = {
+  clear: { name: 'Clear', cover: 0, fogMul: 1, dim: 0, rain: 0 },
+  cloudy: { name: 'Cloudy', cover: 0.4, fogMul: 1.25, dim: 0.25, rain: 0 },
+  rain: { name: 'Rain', cover: 0.55, fogMul: 1.6, dim: 0.4, rain: 0.7 },
+  storm: { name: 'Storm', cover: 0.7, fogMul: 1.9, dim: 0.55, rain: 1 },
+  fog: { name: 'Fog', cover: 0.3, fogMul: 3.2, dim: 0.2, rain: 0 },
+};
+// a town on each map (tile-local centre, radius, name); the village map's town is its own square and streets
+const TOWNS = {
+  shrine: { x: -54, z: -60, r: 16, name: 'Kiyomizu', road: [-54, 0] },
+  bamboo: { x: -46, z: -62, r: 16, name: 'Takemura', road: [0, -62] },
+  village: { x: 0, z: 0, r: 20, name: 'Yamamura', built: true },
+  snow: { x: 56, z: 60, r: 16, name: 'Yukimura', road: [56, 0] },
+  castle: { x: -50, z: 60, r: 16, name: 'Jokamachi', road: [0, 60] },
+};
 
 // ---------- maps (metadata; the builders live inside buildWorld)
 export const MAPS = [
@@ -52,15 +60,6 @@ function canvasTex(w, h, draw, rep = [1, 1]) {
   const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(rep[0], rep[1]); t.anisotropy = 8; return t;
-}
-// ink look: turn any painted texture into ink greys on paper (by brightness)
-function inkify(g, w, h) {
-  const d = g.getImageData(0, 0, w, h), p = d.data;
-  for (let i = 0; i < p.length; i += 4) {
-    const l = Math.min(1, (0.3 * p[i] + 0.55 * p[i + 1] + 0.15 * p[i + 2]) / 255 * 1.25), k = Math.pow(l, 0.8);
-    p[i] = 34 + (233 - 34) * k; p[i + 1] = 29 + (220 - 29) * k; p[i + 2] = 24 + (190 - 24) * k;
-  }
-  g.putImageData(d, 0, 0);
 }
 const speck = (g, w, h, n, col, a0, a1, s0, s1) => { for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${col},${a0 + Math.random() * (a1 - a0)})`; g.beginPath(); g.arc(Math.random() * w, Math.random() * h, s0 + Math.random() * (s1 - s0), 0, 7); g.fill(); } };
 const blades = (g, w, h, n, hues) => { for (let i = 0; i < n; i++) { const [hh, s, l] = hues[i % hues.length]; g.fillStyle = `hsla(${hh + rnd(-8, 8)},${s}%,${l + rnd(-8, 8)}%,${rnd(0.35, 0.8)})`; g.save(); g.translate(Math.random() * w, Math.random() * h); g.rotate(rnd(-0.5, 0.5)); g.fillRect(0, 0, 1 + Math.random(), 3 + Math.random() * 6); g.restore(); } };
@@ -108,7 +107,7 @@ function needles(g, w, h) {
     wrapDraw(g, w, h, x, y, len, (px, py) => { g.beginPath(); g.moveTo(px, py); g.lineTo(px + Math.cos(a) * len, py + Math.sin(a) * len); g.stroke(); });
   }
 }
-// surface painters (real colour); the ink look runs them through inkify
+// surface painters (real colour)
 const PAINT = {
   grass: (g, w, h) => { g.fillStyle = '#58733a'; g.fillRect(0, 0, w, h); speck(g, w, h, 60, '70,90,30', 0.05, 0.18, 6, 26); speck(g, w, h, 40, '120,110,60', 0.04, 0.12, 4, 18); blades(g, w, h, 1600, [[85, 40, 30], [70, 45, 38], [95, 35, 24], [55, 40, 40]]); },
   moss: (g, w, h) => { g.fillStyle = '#3e5629'; g.fillRect(0, 0, w, h); speck(g, w, h, 80, '30,45,20', 0.08, 0.25, 4, 20); speck(g, w, h, 60, '110,120,60', 0.05, 0.15, 3, 12); blades(g, w, h, 900, [[90, 35, 24], [75, 40, 30]]); },
@@ -134,17 +133,17 @@ const PAINT = {
 
 export function buildWorld(scene, renderer, quality) {
   const hi = quality === 'high';
-  const W = { lowMat: !hi, style: 'real', map: null, arenaR: 23.2, wallR: 24.5, bodyR: 23.8, exploreR: 80, tile: 160, camR: 28, leapH: 3.3, explore: false,
+  const W = { lowMat: !hi, map: null, arenaR: 23.2, wallR: 24.5, bodyR: 23.8, exploreR: 80, tile: 160, camR: 28, leapH: 3.3, explore: false,
     colliders: [], gates: [], rings: [], water: [], charms: [], dummies: [], mm: [], particles: 'petals' };
 
-  // ---------- sky: a cloudy daylight sky with a sun or moon (real) or paper with an ink-bleed sun (ink)
+  // ---------- sky: a cloudy daylight sky with a sun or moon
   const skyU = { top: { value: new THREE.Color() }, mid: { value: new THREE.Color() }, bot: { value: new THREE.Color() },
     sunCol: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3() }, sunSize: { value: 900 }, moon: { value: 0 },
-    ink: { value: 0 }, cover: { value: 0.5 }, cloudCol: { value: new THREE.Color() }, time: { value: 0 } };
+    cover: { value: 0.5 }, cloudCol: { value: new THREE.Color() }, time: { value: 0 } };
   const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.ShaderMaterial({
     uniforms: skyU, side: THREE.BackSide, depthWrite: false, fog: false,
     vertexShader: 'varying vec3 vD; void main(){ vD = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position,1.); gl_Position = p.xyww; }',
-    fragmentShader: `uniform vec3 top, mid, bot, sunCol, sunDir, cloudCol; uniform float sunSize, moon, ink, cover, time; varying vec3 vD;
+    fragmentShader: `uniform vec3 top, mid, bot, sunCol, sunDir, cloudCol; uniform float sunSize, moon, cover, time; varying vec3 vD;
       float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float n3(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
         return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
@@ -152,15 +151,6 @@ export function buildWorld(scene, renderer, quality) {
       float fbm(vec3 p){ float a = 0.5, s = 0.; for (int i = 0; i < 5; i++) { s += a * n3(p); p *= 2.03; a *= 0.5; } return s; }
       void main(){ vec3 d = normalize(vD); float h = d.y; vec3 sd = normalize(sunDir); float s = dot(d, sd);
         vec3 c;
-        if (ink > 0.5) {
-          c = h > 0. ? mix(mid, top, pow(clamp(h * 1.4, 0., 1.), 0.8)) : mix(mid, bot, clamp(-h * 5., 0., 1.));
-          c *= 0.92 + 0.06 * n3(d * 7.) + 0.03 * n3(d * 70.);                         // paper blotches and fibres
-          float r = 1.0 - 1.4 / sunSize;
-          float edge = (n3(d * 45.) - 0.5) * 0.006 + (n3(d * 14.) - 0.5) * 0.01;
-          float disc = smoothstep(r - 0.0015, r + 0.0015, s + edge);              // rough ink-bleed edge
-          c = mix(c, sunCol * (0.86 + 0.18 * n3(d * 30.)), disc * 0.93);
-          c = mix(c, sunCol, smoothstep(r - 0.03, r, s) * (1. - disc) * 0.08 * (1. - moon));
-        } else {
           c = h > 0. ? mix(mid, top, pow(clamp(h, 0., 1.), 0.5)) : mix(mid, bot, clamp(-h * 4., 0., 1.));
           c += sunCol * (pow(max(s, 0.), 6.) * 0.22 + pow(max(s, 0.), 60.) * 0.35) * (1. - 0.7 * moon);   // glow round the sun
           float r = 1.0 - 1.0 / sunSize, disc = smoothstep(r - 0.0006, r + 0.0006, s);
@@ -175,7 +165,6 @@ export function buildWorld(scene, renderer, quality) {
           }
           c = mix(c, sunCol * (moon > 0.5 ? 1.0 : 1.6), disc * (1. - cl * 0.85));
           c = mix(c, mid, exp(-abs(h) * 14.) * 0.35);      // haze on the horizon
-        }
         gl_FragColor = vec4(c, 1.);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -228,16 +217,7 @@ export function buildWorld(scene, renderer, quality) {
 
   // ---------- shared, style-aware materials (rebuilt with the map)
   W.glowMat = new THREE.MeshBasicMaterial({ color: 0xffb35a, toneMapped: false });
-  const ink = () => W.style === 'ink';
-  const _c = new THREE.Color(), _hsl = {};
-  // colours: real as given; ink maps them onto ink greys on paper, except accents (vermilion etc.) asked to keep their hue
-  function tone(hex, keep) {
-    if (!ink()) return hex;
-    _c.set(hex); _c.getHSL(_hsl);
-    if (keep && _hsl.s > 0.35) return _c.setHSL(_hsl.h, Math.min(0.75, _hsl.s), Math.min(0.42, _hsl.l)).getHex();
-    const l = Math.pow(Math.min(1, _hsl.l * 1.3), 0.85);
-    return _c.setRGB(0.12 + 0.76 * l, 0.105 + 0.72 * l, 0.09 + 0.6 * l, THREE.SRGBColorSpace).getHex();
-  }
+  const _c = new THREE.Color();
   let made = [];   // materials and textures of the current map, disposed on rebuild
   const keepMat = m => (made.push(m), m);
   // identical materials are shared (per map build), so the static merge can fold every house's timber, every
@@ -250,12 +230,12 @@ export function buildWorld(scene, renderer, quality) {
   // W.lowMat (LOW quality): plain Lambert shading for the scenery, far cheaper per pixel than the physically based
   // material on integrated graphics; roughness and metalness are dropped
   const newMat = (hex, o) => keepMat(W.lowMat
-    ? new THREE.MeshLambertMaterial({ color: tone(hex, o.keep), flatShading: o.flat ?? ink(), side: o.side ?? THREE.FrontSide, vertexColors: !!o.vc, map: o.map || null })
-    : new THREE.MeshStandardMaterial({ color: tone(hex, o.keep), roughness: o.r ?? 0.85, metalness: o.m ?? 0, flatShading: o.flat ?? ink(), side: o.side ?? THREE.FrontSide, vertexColors: !!o.vc, map: o.map || null }));
+    ? new THREE.MeshLambertMaterial({ color: hex, flatShading: o.flat ?? false, side: o.side ?? THREE.FrontSide, vertexColors: !!o.vc, map: o.map || null })
+    : new THREE.MeshStandardMaterial({ color: hex, roughness: o.r ?? 0.85, metalness: o.m ?? 0, flatShading: o.flat ?? false, side: o.side ?? THREE.FrontSide, vertexColors: !!o.vc, map: o.map || null }));
   const texCache = {};
   function tex(kind, rep = [1, 1]) {
     const k = kind + rep.join('x');
-    if (!texCache[k]) { texCache[k] = canvasTex(256, 256, (g, w, h) => { PAINT[kind](g, w, h); if (ink()) inkify(g, w, h); }, rep); made.push(texCache[k]); }
+    if (!texCache[k]) { texCache[k] = canvasTex(256, 256, (g, w, h) => { PAINT[kind](g, w, h); }, rep); made.push(texCache[k]); }
     return texCache[k];
   }
   let matCache = {};
@@ -277,7 +257,7 @@ export function buildWorld(scene, renderer, quality) {
       }, [6, 6]);
       waterNorm.colorSpace = THREE.NoColorSpace;
     }
-    const m = keepMat(new THREE.MeshStandardMaterial({ color: ink() ? 0x8a8170 : 0x2b4a55, roughness: 0.08, metalness: 0.35, normalMap: waterNorm, normalScale: new THREE.Vector2(0.35, 0.35), transparent: true, opacity: 0.9 }));
+    const m = keepMat(new THREE.MeshStandardMaterial({ color: 0x2b4a55, roughness: 0.08, metalness: 0.35, normalMap: waterNorm, normalScale: new THREE.Vector2(0.35, 0.35), transparent: true, opacity: 0.9 }));
     return m;
   }
 
@@ -357,7 +337,7 @@ export function buildWorld(scene, renderer, quality) {
   function flush(name, geo, m, shadow = true) {
     const L = batches[name]; if (!L || !L.length) return;
     const im = new THREE.InstancedMesh(geo, m, L.length);
-    L.forEach((v, i) => { _dm.position.set(v[0], v[1], v[2]); _dm.rotation.set(v[3], v[4], v[5]); _dm.scale.set(v[6], v[7], v[8]); _dm.updateMatrix(); im.setMatrixAt(i, _dm.matrix); if (v[9] !== undefined) im.setColorAt(i, _c.set(tone(v[9]))); });
+    L.forEach((v, i) => { _dm.position.set(v[0], v[1], v[2]); _dm.rotation.set(v[3], v[4], v[5]); _dm.scale.set(v[6], v[7], v[8]); _dm.updateMatrix(); im.setMatrixAt(i, _dm.matrix); if (v[9] !== undefined) im.setColorAt(i, _c.set(v[9])); });
     im.name = name; im.castShadow = shadow; im.receiveShadow = true; G.add(im); delete batches[name];
     made.push(geo);
   }
@@ -527,6 +507,50 @@ export function buildWorld(scene, renderer, quality) {
     solidBox(x, z, 0.7 * s, 0.6 * s, ry, '#6b5a48', 1.9 * s); endProp();
   }
   // ring of instanced wall segments with openings at the gates
+  // A town: a beaten-earth square with a well, two market stalls and a bounty board, ringed by houses facing it
+  // (gaps for two streets), lanterns round the square and a road out to the nearest path. Everything can be cut.
+  function town(T, snowy) {
+    const tr = rng(T.x * 31 + T.z * 17 + 5), q = (a, b) => a + tr() * (b - a), { x: cx, z: cz } = T;
+    if (T.road) path(cx, cz, T.road[0], T.road[1], 5, snowy ? 'packed' : 'dirt', '#8b7356');
+    keepOut(cx, cz, T.r + 4);
+    { const m = texMat(snowy ? 'packed' : 'dirt', [5, 5], { r: 0.95 }); m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -2;
+      const f = new THREE.Mesh(new THREE.CircleGeometry(10, 48), m); f.rotation.x = -Math.PI / 2; f.position.set(cx, 0.018, cz); f.receiveShadow = true; G.add(f);
+      W.mm.push({ k: 'c', x: cx, z: cz, r: 10, col: '#a08b6a' }); }
+    const streets = [Math.atan2(T.road ? T.road[0] - cx : 1, T.road ? -(T.road[1] - cz) : 0)]; streets.push(streets[0] + Math.PI);
+    for (let i = 0; i < 9; i++) {
+      const a = (i + 0.5) / 9 * TAU; if (streets.some(s => Math.abs(angDiff(a, s)) < 0.42)) continue;
+      const [x, z] = polar(a, 14.5); house(cx + x, cz + z, -a, q(5.5, 7), q(4.5, 5.5), q(2.9, 3.6), { thatch: tr() < 0.4, wood: tr() < 0.5 });
+    }
+    // the well
+    beginProp('stone'); { const g = grp(cx, cz);
+      add(new THREE.CylinderGeometry(1.1, 1.2, 0.9, 14), texMat('stone', [2, 1]), 0, 0.45, 0, true, g);
+      add(new THREE.CylinderGeometry(0.85, 0.85, 0.05, 14), mat(0x1c2a30, { r: 0.2 }), 0, 0.82, 0, false, g);
+      for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.14, 2.2, 0.14), mat(0x4a3424, { r: 0.8 }), sx * 1.0, 1.1, 0, true, g);
+      const rf = add(new THREE.ConeGeometry(1.7, 0.8, 4), texMat('roof', [1, 1]), 0, 2.5, 0, true, g); rf.rotation.y = Math.PI / 4;
+      solid(cx, cz, 1.3); } endProp();
+    // market stalls: a counter of goods under a dyed cloth awning
+    const cloths = [0xa8322a, 0x2f5d8a, 0x7a5a2a];
+    for (const [k, a] of [[0, streets[0] + Math.PI / 2], [1, streets[0] - Math.PI / 2]]) {
+      const [ox, oz] = polar(a, 7), sx = cx + ox, sz = cz + oz;
+      beginProp('wood'); const g = grp(sx, sz, -a);
+      add(new THREE.BoxGeometry(2.6, 0.9, 1.0), texMat('wood', [2, 1]), 0, 0.45, 0, true, g);
+      for (const px of [-1.25, 1.25]) for (const pz of [-0.45, 0.45]) add(new THREE.BoxGeometry(0.1, 2.3, 0.1), mat(0x3c2a1c, { r: 0.8 }), px, 1.15, pz, true, g);
+      add(new THREE.BoxGeometry(3.0, 0.06, 1.6), mat(cloths[k], { r: 0.9, keep: true }), 0, 2.3, 0, true, g).rotation.x = 0.12;
+      for (let i = 0; i < 5; i++) add(new THREE.BoxGeometry(0.32, 0.26, 0.32), mat([0xc89a4a, 0x8a3a2a, 0x6a8a3a, 0xd8c8a0, 0x4a6a8a][i], { r: 0.8 }), -1 + i * 0.5, 1.03, q(-0.2, 0.2), true, g);
+      solidBox(sx, sz, 1.4, 0.6, -a, '#7a5a3a'); endProp();
+      (T.stalls = T.stalls || []).push({ x: sx - Math.sin(a) * 1.2, z: sz + Math.cos(a) * 1.2 });   // where the merchant stands (the street side)
+    }
+    // the bounty board
+    { const a = streets[0] + Math.PI, [ox, oz] = polar(a, 8.5), bx = cx + ox, bz = cz + oz;
+      beginProp('wood'); const g = grp(bx, bz, -a);
+      for (const px of [-0.9, 0.9]) add(new THREE.BoxGeometry(0.14, 2.4, 0.14), mat(0x3c2a1c, { r: 0.8 }), px, 1.2, 0, true, g);
+      add(new THREE.BoxGeometry(2.0, 1.2, 0.08), texMat('wood', [1, 1]), 0, 1.6, 0, true, g);
+      for (let i = 0; i < 4; i++) add(new THREE.BoxGeometry(0.36, 0.48, 0.02), mat(0xece2c8, { r: 0.9 }), -0.6 + i * 0.4, 1.6 + q(-0.2, 0.2), 0.05, false, g);
+      add(new THREE.BoxGeometry(2.3, 0.1, 0.4), texMat('roof', [1, 1]), 0, 2.3, 0, true, g);
+      solidBox(bx, bz, 1.1, 0.3, -a, '#7a5a3a'); endProp();
+      T.board = { x: bx - Math.sin(a) * 1.3, z: bz + Math.cos(a) * 1.3 }; }
+    for (let k = 0; k < 6; k++) { const [x, z] = polar(k / 6 * TAU + 0.26, 10.6); lantern(cx + x, cz + z, 0.9, false); }
+  }
   function wallRing(rad, gaps, gapHalf, layers, h = 99, cap = 'stone') {
     const segLen = 2.0, segN = Math.ceil(TAU * rad / segLen), gh = Math.asin(Math.min(0.99, gapHalf / rad));
     const mats = [];
@@ -575,12 +599,11 @@ export function buildWorld(scene, renderer, quality) {
   }
   // colour the ranges for the current time of day
   const _rc = new THREE.Color(), _hz = new THREE.Color(), _sn = new THREE.Color(), _vc = new THREE.Color();
-  function colourRanges(T, real) {
+  function colourRanges(T) {
     for (const R of W.ranges || []) {
       _hz.set(T.fog);
-      if (real) _rc.set(T.fog).lerp(new THREE.Color(0x34404c), 0.55 - 0.35 * R.far);
-      else _rc.set(T.fog).lerp(new THREE.Color(T.ink), 0.5 - 0.3 * R.far);
-      _sn.set(T.mid).lerp(new THREE.Color(0xffffff), real ? 0.65 : 0.2).lerp(_hz, 0.3 * R.far);
+      _rc.set(T.fog).lerp(new THREE.Color(0x34404c), 0.55 - 0.35 * R.far);
+      _sn.set(T.mid).lerp(new THREE.Color(0xffffff), 0.65).lerp(_hz, 0.3 * R.far);
       const c = R.geo.attributes.color;
       for (let i = 0; i < c.count; i++) { _vc.copy(_hz).lerp(_rc, Math.min(1, 0.25 + R.tone[i] * 0.9)).lerp(_sn, R.snow[i]); c.setXYZ(i, _vc.r, _vc.g, _vc.b); }
       c.needsUpdate = true;
@@ -634,7 +657,7 @@ export function buildWorld(scene, renderer, quality) {
       pagoda(-52, 36, 1.4); keepOut(-52, 36, 9);
       waterDisc(42, 34, 7); for (let i = 0; i < 6; i++) { const a = i / 6 * TAU; rock(42 + Math.sin(a) * 8.6, 34 - Math.cos(a) * 8.6, r(0.6, 1.1), true, 0.6); }
       keepOut(-44, -40, 8); hokora(-44, -40, 0.6);
-      const sak = this.style === 'ink' ? 0x3a302a : 0xf1a9bd;
+      const sak = 0xf1a9bd;
       for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + k * Math.PI / 4 + r(-0.12, 0.12), [x, z] = polar(a, W.wallR + r(3, 5)); tree(x, z, r(1.1, 1.35), sak); keepOut(x, z, 3); }
       scatter(hi ? 900 : 480, W.wallR + 4, W.exploreR + 12, (x, z) => bamboo(x, z), 0.4);
       flushBamboo(); flushTrees(); flushRocks(false);
@@ -742,7 +765,7 @@ export function buildWorld(scene, renderer, quality) {
         for (const rr of [32.6, 38.4]) { const b = new THREE.Mesh(new THREE.RingGeometry(rr - 0.5, rr + 0.5, 120), texMat('rockface', [40, 1])); b.rotation.x = -Math.PI / 2; b.position.y = 0.06; b.receiveShadow = true; G.add(b); }
         W.mm.push({ k: 'ring', r: 35.5, w: 2.5, gaps: gA, gh: Math.asin(2.6 / 35.5), col: '#4f7f95' });
         W.water.push({ r0: 33, r1: 38 });   // the moat can be waded
-        for (const a of gA) { beginProp('wood'); const [x, z] = polar(a, 35.5), g = grp(x, z, -a); add(new THREE.BoxGeometry(5, 0.3, 8), texMat('wood', [2, 3]), 0, 0.2, 0, true, g); for (const sx of [-1, 1]) for (const sz of [-3.6, 0, 3.6]) add(new THREE.BoxGeometry(0.18, 1.1, 0.18), red(), sx * 2.4, 0.75, sz, true, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.12, 0.12, 8), red(), sx * 2.4, 1.25, 0, true, g); endProp(); }
+        for (const a of gA) { const [bx, bz] = polar(a, 35.5); W.dry.push({ x: bx, z: bz, ax: Math.sin(a), az: -Math.cos(a), hl: 4.2, hw: 2.7, prop: beginProp('wood') }); const [x, z] = polar(a, 35.5), g = grp(x, z, -a); add(new THREE.BoxGeometry(5, 0.3, 8), texMat('wood', [2, 3]), 0, 0.2, 0, true, g); for (const sx of [-1, 1]) for (const sz of [-3.6, 0, 3.6]) add(new THREE.BoxGeometry(0.18, 1.1, 0.18), red(), sx * 2.4, 0.75, sz, true, g); for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.12, 0.12, 8), red(), sx * 2.4, 1.25, 0, true, g); endProp(); }
       }
       for (const a of gA) { const [px, pz] = polar(a, 39), [qx, qz] = polar(a, W.exploreR); path(px, pz, qx, qz, 6, 'stone'); }
       for (let k = 0; k < 4; k++) { const [x, z] = polar(Math.PI / 4 + k * Math.PI / 2, 12.5); beginProp('stone'); add(new THREE.BoxGeometry(2.4, 0.5, 2.4), texMat('stone', [1, 1]), 0, 0.25, 0, true, grp(x, z)); solidBox(x, z, 1.2, 1.2, 0, '#6b5a48', 0.55); endProp(); pine(x, z, 0.85, false); }
@@ -755,7 +778,7 @@ export function buildWorld(scene, renderer, quality) {
         add(new THREE.ConeGeometry(0.4, 1.2, 6), mat(0xc8a040, { r: 0.4, m: 0.6, keep: true }), 0, y + 0.8, 0, true, g);
         solidBox(kx, kz, 8.5, 8.5, 0); keepOut(kx, kz, 18); endProp(); }
       house(52, 40, -2.2, 7, 5, 3, { wood: true }); keepOut(52, 40, 9);
-      const sak = W.style === 'ink' ? 0x3a302a : 0xf1a9bd;
+      const sak = 0xf1a9bd;
       scatter(hi ? 110 : 60, 42, W.exploreR + 10, (x, z) => R() < 0.45 ? tree(x, z, r(1, 1.4), R() < 0.6 ? sak : null) : pine(x, z, r(0.9, 1.4)), 3);
       flushTrees(); flushPines(false); flushRocks(false);
       [[0, -48], [52, 33], [-60, 30], [60, -30], [-35.5, 1], [12, 70], [-70, -40], [30, -75]].forEach(([x, z]) => charm(x, z));
@@ -774,10 +797,13 @@ export function buildWorld(scene, renderer, quality) {
     for (const g of [CG, MG]) if (g) { scene.remove(g); g.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); }); }
     for (const m of made) m.dispose(); made = []; for (const k in texCache) delete texCache[k]; stoneMat = null; matCache = {}; cutMats.clear();
     G = new THREE.Group(); CG = new THREE.Group(); MG = new THREE.Group(); scene.add(CG, MG);
-    W.map = id; W.colliders = []; W.gates = []; W.rings = []; W.water = []; props = []; curProp = null; W.charms = []; W.dummies = []; W.mm = []; W.leapH = 3.3;
+    W.map = id; W.colliders = []; W.gates = []; W.rings = []; W.water = []; W.dry = []; props = []; curProp = null; W.charms = []; W.dummies = []; W.mm = []; W.leapH = 3.3;
     grid = new Map(); boxes = []; clear = [];
     R = rng(MAPS.findIndex(m => m.id === id) * 7919 + 13);
+    const T = W.town = { ...TOWNS[id] };
+    if (!T.built) town(T, id === 'snow');
     BUILD[id].call(W);
+    if (T.built) { T.stalls = [{ x: 4, z: 6 }, { x: -4, z: 6 }]; T.board = { x: 0, z: -7 }; }
     W.arenaR = W.wallR - 1.3; W.bodyR = W.wallR - 0.7; W.tile = W.exploreR * 2;
     mergeStatic(G); measureProps();
     tiles = []; for (let i = 0; i < 9; i++) { const t = i === 4 ? G : G.clone(); tiles.push(t); scene.add(t); }
@@ -791,7 +817,24 @@ export function buildWorld(scene, renderer, quality) {
     W.mmLayer = null;
     W.setTheme(curTheme);
     W.setExplore(W.explore);
+    warmCutMaterials();
   };
+  // The cut pieces of each scenery material use a vertex-coloured copy of it (cutMat); compiling that shader the
+  // first time something made of it was cut froze the game for a few hundred ms mid-fight. So the copies are
+  // compiled when the map loads (during the screen change anyway), against the real scene's lights and fog.
+  function warmCutMaterials() {
+    const mats = new Set();
+    for (const pr of props) {
+      for (const it of pr.inst) { const im = G.getObjectByName(it.name); if (im) mats.add(im.material); }
+      for (const rg of pr.ranges) mats.add(rg.mat);
+    }
+    const tmp = new THREE.Scene(), cam = new THREE.PerspectiveCamera(), g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2)); g.setAttribute('color', new THREE.Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
+    for (const m of mats) { const c = m.isMeshBasicMaterial ? MATS.glow : cutMat(m), o = new THREE.Mesh(g, c); o.castShadow = o.receiveShadow = true; tmp.add(o); }
+    try { renderer.compile(tmp, cam, scene); } catch (e) {}   // (compileAsync trips over the separate light scene in this three.js)
+    g.dispose();
+  }
   // one mesh per material (and shadow flag) for everything static in the tile; instanced batches stay as they are
   function mergeStatic(root) {
     root.updateMatrixWorld(true);
@@ -869,7 +912,7 @@ export function buildWorld(scene, renderer, quality) {
       const ims = tiles.map(t => t.getObjectByName(it.name)).filter(Boolean); if (!ims.length) continue;
       const im = ims[0]; im.getMatrixAt(it.i, _M);
       items.push(sliceItem(im.geometry.clone().applyMatrix4(_M.clone().premultiply(T)), im.instanceColor ? (im.getColorAt(it.i, _ic), _ic.clone()) : WHITE, im.material, pr.cap));
-      for (const m of ims) { m.setMatrixAt(it.i, ZERO); m.instanceMatrix.needsUpdate = true; }
+      for (const m of ims) { m.setMatrixAt(it.i, ZERO); m.instanceMatrix.addUpdateRange(it.i * 16, 16); m.instanceMatrix.needsUpdate = true; }   // re-upload just this instance
     }
     for (const rg of pr.ranges) {
       const Pa = rg.geo.attributes.position, Na = rg.geo.attributes.normal, Ua = rg.geo.attributes.uv, a = rg.start * 3, b = (rg.start + rg.count) * 3, g = new THREE.BufferGeometry();
@@ -877,7 +920,7 @@ export function buildWorld(scene, renderer, quality) {
       if (Ua) g.setAttribute('uv', new THREE.Float32BufferAttribute(Ua.array.slice(rg.start * 2, (rg.start + rg.count) * 2), 2));
       g.applyMatrix4(T);
       items.push(sliceItem(g, WHITE, rg.mat, pr.cap));
-      Pa.array.fill(0, a, b); Pa.needsUpdate = true;   // every tile copy shares this geometry
+      Pa.array.fill(0, a, b); Pa.addUpdateRange(a, b - a); Pa.needsUpdate = true;   // every tile copy shares this geometry; re-upload only the cut range, not the whole merged mesh
     }
     for (const name of pr.live || []) {   // moving parts (the water wheel) aren't merged: copy their meshes as they stand now
       const o = G.getObjectByName(name); if (!o) continue;
@@ -891,9 +934,10 @@ export function buildWorld(scene, renderer, quality) {
   // wading: inside a pond, paddy or the moat (tile-local test)
   W.inWater = pos => {
     const q = W.local(pos);
+    // dry footing over the water: the moat's bridges (until they're cut away)
+    if (W.dry.some(b => { const dx = q.x - b.x, dz = q.z - b.z; return !b.prop.cut && Math.abs(dx * b.ax + dz * b.az) < b.hl && Math.abs(dx * b.az - dz * b.ax) < b.hw; })) return false;
     return W.water.some(w => w.r0 !== undefined ? (d => d > w.r0 && d < w.r1)(Math.hypot(q.x, q.z)) : w.r !== undefined ? Math.hypot(q.x - w.x, q.z - w.z) < w.r : Math.abs(q.x - w.x) < w.hw && Math.abs(q.z - w.z) < w.hd);
   };
-  W.setStyle = s => { W.style = s; skyU.ink.value = s === 'ink' ? 1 : 0; if (W.map) W.setMap(W.map, true); };
   // explore mode opens the whole map (charms show; the arena edge no longer holds you in)
   W.setExplore = on => {
     W.explore = on;
@@ -937,34 +981,64 @@ export function buildWorld(scene, renderer, quality) {
   }
   const lxPush = (p, o, lx, lz) => { p.x += lx * o.c + lz * o.s; p.z += -lx * o.s + lz * o.c; };
 
-  W.setTheme = (i) => {
-    curTheme = i;
-    const real = W.style !== 'ink', T = (real ? THEMES_REAL : THEMES_INK)[i];
+  let rainK = 0;
+  W.setTheme = (i) => { curTheme = i; W.skyState = null; rainK = 0; applyTheme(THEMES_REAL[i], true); };
+  // explore: blend two themes (a to b by t) under a weather; env: also rebuild the reflections (costly, so throttled)
+  const COLS = ['top', 'mid', 'bot', 'sun', 'fog', 'light', 'hemiS', 'hemiG', 'cloud', 'blossom'], _ca = new THREE.Color(), _cb = new THREE.Color(), GREY = new THREE.Color(0x707680);
+  W.setSky = (a, b, t, w, env) => {
+    W.skyState = { a, b, t, w };
+    const T = {};
+    for (const k in a) { const va = a[k], vb = b[k] ?? va; T[k] = typeof va === 'number' ? va + (vb - va) * t : t < 0.5 ? va : vb; }
+    for (const k of COLS) T[k] = _ca.set(a[k] ?? 0xffffff).lerp(_cb.set(b[k] ?? a[k] ?? 0xffffff), t).getHex();
+    T.sunDir = a.sunDir.map((v, i) => v + (b.sunDir[i] - v) * t); T.moon = (t < 0.5 ? a : b).moon;
+    T.clouds = Math.min(1, (T.clouds || 0) + w.cover); T.fogD *= w.fogMul; T.li *= 1 - 0.55 * w.dim; T.hi *= 1 - 0.25 * w.dim;
+    for (const k of ['top', 'mid', 'fog', 'cloud']) T[k] = _ca.set(T[k]).lerp(GREY.clone().multiplyScalar(k === 'cloud' ? 0.8 : 0.9 * (0.4 + 0.6 * T.li / 3)), w.dim * 0.6).getHex();
+    rainK = w.rain;
+    applyTheme(T, env);
+  };
+  function applyTheme(T, env) {
     skyU.top.value.set(T.top); skyU.mid.value.set(T.mid); skyU.bot.value.set(T.bot); skyU.sunCol.value.set(T.sun);
     skyU.sunDir.value.set(...T.sunDir).normalize(); skyU.sunSize.value = T.sunSize; skyU.moon.value = T.moon ? 1 : 0;
     skyU.cover.value = T.clouds ?? 0; skyU.cloudCol.value.set(T.cloud ?? 0xffffff);
     const snowy = W.particles === 'snow';
-    scene.fog.color.set(T.fog); scene.fog.density = T.fogD * (real && snowy ? 1.4 : 1);
+    scene.fog.color.set(T.fog); scene.fog.density = T.fogD * (snowy ? 1.4 : 1);
     const sd = new THREE.Vector3(...T.sunDir).normalize();
     sunOff.set(sd.x * 60, Math.max(30, sd.y * 120), sd.z * 60);
     sun.color.set(T.light); sun.intensity = T.li;
     fill.position.set(-sd.x * 40, 25, -sd.z * 40);
-    fill.color.set(T.hemiS); fill.intensity = (real ? 0.25 : 0.45) + T.lantern * 0.35;
+    fill.color.set(T.hemiS); fill.intensity = 0.25 + T.lantern * 0.35;
     hemi.color.set(T.hemiS); hemi.groundColor.set(T.hemiG); hemi.intensity = T.hi;
     W.glowMat.color.setRGB(1.0 * T.lantern + 0.4, 0.62 * T.lantern + 0.25, 0.25 * T.lantern + 0.1);
     centreLight.intensity = T.lantern * 12;
     starMat.opacity = T.stars;
-    const pc = !real ? T.petals : snowy ? 0xffffff : W.particles === 'leaves' ? 0x7a8a3a : T.blossom;
+    const pc = snowy ? 0xffffff : W.particles === 'leaves' ? 0x7a8a3a : T.blossom;
     petalMat.color.set(pc); petalMat.emissive.set(snowy ? 0x606870 : 0x401020); petalMat.emissiveIntensity = snowy ? 0.6 : 0.4;
-    colourRanges(T, real);
+    colourRanges(T);
     hemiEnv.material.color.set(T.hemiG);
-    renderer.toneMapping = real ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
-    renderer.toneMappingExposure = T.exposure * (real ? 0.95 : 1);
-    if (envRT) envRT.dispose();
-    envRT = pmrem.fromScene(envScene, 0.02);
-    scene.environment = envRT.texture;
-    scene.environmentIntensity = real ? 0.55 : 0.7;
-  };
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = T.exposure * 0.95;
+    if (env || !envRT) { if (envRT) envRT.dispose(); envRT = pmrem.fromScene(envScene, 0.02); scene.environment = envRT.texture; }
+    scene.environmentIntensity = 0.55;
+  }
+  // rain: streaks falling round the camera, slanted by the wind (slow white sleet on the snowy map)
+  const RN = hi ? 1400 : 600, rainPos = new Float32Array(RN * 6), rd = Array.from({ length: RN }, () => ({ x: rnd(-20, 20), y: rnd(0, 16), z: rnd(-20, 20), s: rnd(0.8, 1.2) }));
+  const rainGeo = new THREE.BufferGeometry(); rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3).setUsage(THREE.DynamicDrawUsage));
+  const rainMat = new THREE.LineBasicMaterial({ color: 0xb8c4d0, transparent: true, opacity: 0, depthWrite: false, fog: true });
+  const rain = new THREE.LineSegments(rainGeo, rainMat); rain.frustumCulled = false; rain.visible = false; scene.add(rain);
+  function updRain(dt, cam) {
+    rain.visible = rainK > 0.02 && W.explore; if (!rain.visible) return;
+    const snowy = W.particles === 'snow', sp = snowy ? 5 : 24, len = snowy ? 0.12 : 0.55, n = Math.floor(RN * rainK);
+    rainMat.color.set(snowy ? 0xffffff : 0xb8c4d0); rainMat.opacity = (snowy ? 0.8 : 0.42) * Math.min(1, rainK * 1.4);
+    for (let i = 0; i < RN; i++) {
+      const p = rd[i], o = i * 6;
+      if (i >= n) { rainPos.fill(0, o, o + 6); continue; }
+      p.y -= dt * sp * p.s; p.x += dt * (snowy ? 1.2 : 3);
+      if (p.y < 0) { p.y += 16; }
+      p.x = wrap(p.x, cam.x, 20); p.z = wrap(p.z, cam.z, 20);
+      rainPos[o] = p.x; rainPos[o + 1] = p.y; rainPos[o + 2] = p.z; rainPos[o + 3] = p.x - (snowy ? 0.05 : 0.07); rainPos[o + 4] = p.y + len; rainPos[o + 5] = p.z;
+    }
+    rainGeo.attributes.position.needsUpdate = true;
+  }
 
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
   const wrap = (v, c, h) => v - c > h ? v - 2 * h : v - c < -h ? v + 2 * h : v;
@@ -1008,6 +1082,7 @@ export function buildWorld(scene, renderer, quality) {
       petals.setMatrixAt(i, _m.compose(_p.set(p.x, p.y, p.z), _q.setFromEuler(_e), _s.setScalar(p.s * (snow ? 1.1 : leaves ? 1.4 : 1))));
     }
     petals.instanceMatrix.needsUpdate = true;
+    updRain(dt, cam);
   };
   return W;
 }
