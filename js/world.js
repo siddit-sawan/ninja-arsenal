@@ -274,7 +274,8 @@ export function buildWorld(scene, renderer, quality) {
   // Props: every tree, stalk, rock, lantern, house, wall segment... remembers its instanced parts, its slice of the
   // merged tile meshes and its colliders, so the whole thing can be lifted out and cut (cap = colour of the cut face)
   let props = [], curProp = null;
-  const beginProp = cap => (curProp = { cap, inst: [], ranges: [], col: [], box: new THREE.Box3(), cut: false }, props.push(curProp), curProp);
+  let inTown = false;   // props built while true belong to a town: the blade glances off them (as it does off every house)
+  const beginProp = cap => (curProp = { cap, inst: [], ranges: [], col: [], box: new THREE.Box3(), cut: false, town: inTown }, props.push(curProp), curProp);
   const endProp = () => { curProp = null; };
   const add = (geo, m, x, y, z, shadow = true, parent = G) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; parent.add(o); return o; };
   const grp = (x, z, ry = 0, s = 1) => { const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; g.scale.setScalar(s); if (curProp) g.userData.prop = curProp; G.add(g); return g; };
@@ -460,7 +461,7 @@ export function buildWorld(scene, renderer, quality) {
   }
   // timber house with a tiled (or thatched) gable roof; the door side faces +z of its own frame
   function house(x, z, ry, w = 7, d = 5.5, h = 3.2, o = {}) {
-    beginProp('wood'); const g = grp(x, z, ry);
+    beginProp('wood').town = true; const g = grp(x, z, ry);
     const wall = o.wall || (o.wood ? texMat('wood', [Math.round(w / 1.5) / 2, Math.round(h / 1.5) / 2]) : texMat('plaster', [1, 1])), timber = mat(0x3c2a1c, { r: 0.8 });
     add(new THREE.BoxGeometry(w, h, d), wall, 0, h / 2, 0, true, g);
     add(new THREE.BoxGeometry(w + 0.1, 0.22, d + 0.1), timber, 0, h * 0.45, 0, true, g);
@@ -510,6 +511,7 @@ export function buildWorld(scene, renderer, quality) {
   // A town: a beaten-earth square with a well, two market stalls and a bounty board, ringed by houses facing it
   // (gaps for two streets), lanterns round the square and a road out to the nearest path. Everything can be cut.
   function town(T, snowy) {
+    inTown = true;
     const tr = rng(T.x * 31 + T.z * 17 + 5), q = (a, b) => a + tr() * (b - a), { x: cx, z: cz } = T;
     if (T.road) path(cx, cz, T.road[0], T.road[1], 5, snowy ? 'packed' : 'dirt', '#8b7356');
     keepOut(cx, cz, T.r + 4);
@@ -550,6 +552,7 @@ export function buildWorld(scene, renderer, quality) {
       solidBox(bx, bz, 1.1, 0.3, -a, '#7a5a3a'); endProp();
       T.board = { x: bx - Math.sin(a) * 1.3, z: bz + Math.cos(a) * 1.3 }; }
     for (let k = 0; k < 6; k++) { const [x, z] = polar(k / 6 * TAU + 0.26, 10.6); lantern(cx + x, cz + z, 0.9, false); }
+    inTown = false;
   }
   function wallRing(rad, gaps, gapHalf, layers, h = 99, cap = 'stone') {
     const segLen = 2.0, segN = Math.ceil(TAU * rad / segLen), gh = Math.asin(Math.min(0.99, gapHalf / rad));
@@ -875,11 +878,11 @@ export function buildWorld(scene, renderer, quality) {
     }
   }
   // props whose nearest copy is within R of pos: [{ prop, ox, oz, box (world) }]
-  W.propsNear = (pos, R) => {
+  W.propsNear = (pos, R, withTown = false) => {   // town props only when asked (to show the blade glancing off them)
     if (!W.explore) return [];
     const P = W.tile, tx = Math.round(pos.x / P) * P, tz = Math.round(pos.z / P) * P, lx = pos.x - tx, lz = pos.z - tz, out = [];
     for (const pr of props) {
-      if (pr.cut) continue;
+      if (pr.cut || (pr.town && !withTown)) continue;
       let dx = pr.cx - lx, dz = pr.cz - lz; const kx = Math.round(dx / P), kz = Math.round(dz / P); dx -= kx * P; dz -= kz * P;
       if (Math.hypot(dx, dz) - pr.rad > R) continue;
       const ox = tx + kx * P, oz = tz + kz * P;
@@ -905,7 +908,7 @@ export function buildWorld(scene, renderer, quality) {
     return { geo: g, mat: glow ? MATS.glow : cutMat(m), cap };
   }
   W.cutProp = (pr, ox, oz) => {
-    if (pr.cut) return null;
+    if (pr.cut || pr.town) return null;
     pr.cut = true; W.dirty = true;
     const items = [], T = new THREE.Matrix4().makeTranslation(ox, 0, oz);
     for (const it of pr.inst) {

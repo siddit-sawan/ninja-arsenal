@@ -2,3 +2,5 @@ dist/
 *.zip
 .DS_Store
 Thumbs.db
+marketing/frames/
+marketing/capture.log

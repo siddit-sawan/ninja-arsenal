@@ -22,6 +22,7 @@ const QS = new URLSearchParams(location.search);
 const DEV = ['localhost', '127.0.0.1'].includes(location.hostname);
 let dbgDraw = '';   // dev (&dbg): draw calls and triangles of the last frame, shown in the tab title   // dev-only URL switches never work on the live site
 const AUTO = DEV && QS.has('auto');                // dev: autopilot swipes (for testing)
+const REC = DEV && QS.has('rec');                  // dev: frame-by-frame recording for store art (tools/capture.py)
 
 /* ============ save ============ */
 const SAVE_KEY = 'ninjaArsenal_v1';
@@ -132,6 +133,7 @@ const dynRes = { scale: 1, acc: 0, n: 0, slow: 0, st: null, settle: 0 };
 // two-thirds of the pixels to shade, which integrated graphics need. Set at start and on resize only.
 function basePR() { return quality === 'high' ? Math.min(devicePixelRatio || 1, 1.5) : Math.min(devicePixelRatio || 1, 1, 720 / Math.max(1, innerHeight)); }
 function tuneRes(rdt) {
+  if (REC) return;   // recording runs on a virtual clock: frame times mean nothing
   if (state !== dynRes.st || state !== 'play' || finish) { dynRes.st = state; dynRes.settle = 2.5; dynRes.acc = dynRes.n = dynRes.slow = 0; return; }   // menus, pause and cutscenes don't count
   if (dynRes.settle > 0) { dynRes.settle -= Math.min(rdt, 0.1); return; }
   if (document.hidden || rdt <= 0 || rdt >= 0.25) return;   // ignore tab switches and one-off hitches (rdt is the raw, unclamped frame time)
@@ -176,15 +178,16 @@ function applyQuality() {
   resize();
 }
 function resize() {
-  vw = innerWidth; vh = innerHeight;
-  renderer.setPixelRatio(basePR());
+  const fixed = REC && QS.get('size') && QS.get('size').split('x').map(Number);   // recording: exactly this many pixels, whatever the window
+  vw = fixed ? fixed[0] : innerWidth; vh = fixed ? fixed[1] : innerHeight;
+  renderer.setPixelRatio(fixed ? 1 : basePR());
   renderer.setSize(vw, vh, false);
   if (composer) composer.setSize(vw, vh);
   camera.aspect = vw / vh;
   const hf = 80 * Math.PI / 180;   // keep at least ~80° horizontal view on narrow screens
   camera.fov = baseFov = clamp(2 * Math.atan(Math.tan(hf / 2) / camera.aspect) * 180 / Math.PI, 58, 96);
   camera.updateProjectionMatrix();
-  const tc = $('trail'), dpr = Math.min(devicePixelRatio || 1, 2);
+  const tc = $('trail'), dpr = fixed ? 1 : Math.min(devicePixelRatio || 1, 2);
   tc.width = vw * dpr; tc.height = vh * dpr; tctx.setTransform(dpr, 0, 0, dpr, 0, 0); tDrawn = true;
 }
 const tctx = $('trail').getContext('2d');
@@ -223,7 +226,7 @@ function startSwing(dx, dy, dur = 0.16) {
 const _vq = new THREE.Quaternion(), _vp = new V3(), _vb = new V3();
 const inGame = () => ['play', 'clearing', 'gameover', 'paused'].includes(state);
 function updateVM(dt, t) {
-  vm.visible = vmMode === 'display' || (save.cam === 'fp' && inGame() && cineW < 0.35);
+  vm.visible = vmMode === 'display' || (save.cam === 'fp' && inGame() && cineW < 0.35 && relaxK < 0.5);   // explore: hidden while sheathed
   let id = vmMode === 'display' ? displayId : cur;
   showVM(id);
   vmArm.visible = vmMode !== 'display' && WEAP[id].mode !== 'throw';
@@ -362,13 +365,13 @@ function animEnemy(e, dt) {
   tw(P.hips, 'z', Math.sin(e.t * 1.3 + e.ph) * 0.035);   // idle weight shift (also a slight roll while running)
   if (e.state === 'run' || e.state === 'charging') {
     e.ph += dt * (e.state === 'charging' ? 15 : e.speed) * (e.d.boss ? 1.6 : 2.3);
-    const s = Math.sin(e.ph), c = Math.cos(e.ph);
-    P.legL.rotation.x = -s * 0.85; P.legR.rotation.x = s * 0.85;
-    P.kneeL.rotation.x = Math.max(0, c) * 1.3 + land; P.kneeR.rotation.x = Math.max(0, -c) * 1.3 + land;
-    P.armL.rotation.x = s * 0.8; rotTo(P.armR, e.kind === 'runner' ? -s * 0.8 : -0.45 - s * 0.25, k);
-    P.elbowL.rotation.x = -0.9; P.elbowR.rotation.x = -1.0;
-    P.hips.rotation.x = (e.kind === 'runner' ? 0.45 : 0.25) + land * 0.3;
-    P.hips.position.y = RIG.hips.y + Math.abs(c) * 0.06 - land * 0.22;
+    const s = Math.sin(e.ph), c = Math.cos(e.ph), kr = 1 - Math.exp(-dt * 16), amp = e.state === 'charging' ? 1 : clamp(e.speed / 3, 0.4, 1);
+    tw(P.legL, 'x', -s * 0.85 * amp, kr); tw(P.legR, 'x', s * 0.85 * amp, kr);
+    tw(P.kneeL, 'x', Math.max(0, c) * 1.3 * amp + land, kr); tw(P.kneeR, 'x', Math.max(0, -c) * 1.3 * amp + land, kr);
+    tw(P.armL, 'x', s * 0.8 * amp, kr); rotTo(P.armR, e.kind === 'runner' ? -s * 0.8 : -0.45 - s * 0.25 * amp, k);
+    tw(P.elbowL, 'x', -0.9, kr); tw(P.elbowR, 'x', -1.0, kr);
+    tw(P.hips, 'x', (e.kind === 'runner' ? 0.45 : 0.25) * amp + land * 0.3, kr);
+    P.hips.position.y += (RIG.hips.y + Math.abs(c) * 0.06 * amp - land * 0.22 - P.hips.position.y) * kr;
     tw(P.torso, 'y', s * 0.2); tw(P.torso, 'x', 0);   // shoulders counter the hips
     P.head.rotation.x = -P.hips.rotation.x * 0.6; P.head.rotation.y = -P.torso.rotation.y * 0.8;   // eyes stay on target
     return;
@@ -662,6 +665,144 @@ function updPProj(dt) {
 }
 function removePProj(pr) { scene.remove(pr.g); const i = pProj.indexOf(pr); if (i >= 0) pProj.splice(i, 1); }
 
+/* ============ at ease (explore) ============ */
+// Out exploring, with nothing to fight near, the hero puts the weapon away after a few seconds and stands and walks
+// at ease: upright, arms hanging and swinging naturally with the stride. Any attack (or picking a weapon) draws it
+// again at once.
+let relaxK = 0, lastAct = 0;
+function unsheathe() { if (relaxK > 0.5) drawT = T; relaxK = 0; lastAct = T; }
+function calm() {
+  if (!stage || !stage.explore || state !== 'play' || finish || fling.on || swing.on || player.aero || player.plunge || trialRun || duelNPC || jab > 0) return false;
+  if (T - lastAct < 3) return false;
+  return !enemies.some(e => !e.d.dummy && Math.hypot(e.x - player.pos.x, e.z - player.pos.z) < 16);
+}
+function relaxPose(P, dt, s, br) {
+  const want = calm() ? 1 : 0;
+  relaxK += (want - relaxK) * (1 - Math.exp(-dt * (want ? 2.5 : 14)));
+  if (relaxK < 0.01 || finish) return;
+  const r = relaxK, sp = clamp(Math.hypot(player.vel.x, player.vel.z) / SPEED, 0, 1), mix = (o, ax, v) => { o.rotation[ax] += (v - o.rotation[ax]) * r; };
+  mix(P.armR, 'x', -s * 0.55 - 0.05); mix(P.armR, 'z', 0.06); mix(P.elbowR, 'x', -0.15 - 0.25 * sp);   // arms swing against the legs
+  mix(P.armL, 'x', s * 0.55 - 0.05); mix(P.armL, 'z', -0.06); mix(P.elbowL, 'x', -0.15 - 0.25 * sp);
+  mix(P.torso, 'x', br * 0.02); mix(P.torso, 'y', -s * 0.12); mix(P.head, 'y', 0);
+  if (player.ground && player.flip <= 0) {   // standing tall: straight legs, feet under the hips
+    mix(P.hips, 'x', 0.03 + sp * 0.1);
+    if (sp < 0.05) { mix(P.legL, 'x', 0); mix(P.legR, 'x', 0); mix(P.kneeL, 'x', 0.03); mix(P.kneeR, 'x', 0.03); }
+    mix(P.legL, 'z', 0); mix(P.legR, 'z', 0);
+  }
+}
+
+/* ============ aerial attacks ============ */
+// In the air, three weapons change: one aerial attack per jump (the next one after landing).
+// - Katana, TSUBAME GAESHI: the cut spins the whole body round, hangs him in the air a moment, and a return cut
+//   follows along the mirrored line, harder and longer.
+// - Kusarigama, KAITEN: the sickle whirls round him on its chain, cutting everything in a ring around him.
+// - Naginata, RAKURAI: he drives down blade-first; landing cuts through everything round the impact.
+// From a double jump (the flip), each becomes a somersault instead: ENGETSU, a front flip ending in an overhead
+// cleave; a vertical whirl of the chain in front of him; and a front flip into the plunge.
+// Bosses and duelling rivals take the damage instead of being cut apart.
+const flipping = () => player.flip > 0 || player.jumps >= 2;
+const wrapHips = () => { if (heroP.hips) { const x = heroP.hips.rotation.x; heroP.hips.rotation.x = Math.atan2(Math.sin(x), Math.cos(x)); } };
+const aeroReady = () => airborne() && !finish && !player.plunge && !player.aeroUsed && player.y > 0.6;
+const radialCut = (e, from, pushUp = 0.3) => {   // a cut through e's middle, its face turned toward `from`
+  const c = bodyCenter(e), out = new V3(c.x - from.x, 0, c.z - from.z); if (out.lengthSq() < 1e-4) out.set(1, 0, 0); out.normalize();
+  return { c, out, push: out.clone().setY(pushUp).normalize() };
+};
+function aeroHit(e, plane, push, dmg, sid, weapon) {
+  if (!enemies.includes(e) || e.stormed) return;
+  if (!e.d.boss && !e.npc && (e.hp <= dmg || e.downed)) killEnemy(e, plane, push, { stroke: sid, weapon });
+  else hurtEnemy(e, dmg, bodyCenter(e), push);
+}
+function aeroScenery(at, R, sid, planeOf) {   // corpses and (in explore) props in reach are cut too
+  let n = 0;
+  for (const b of phys.all()) { if (b.sink || b.stroke === sid || n >= 8) continue; const c = phys.center(b); if (Math.hypot(c.x - at.x, c.z - at.z) > R) continue; cutBody(b, planeOf(c), c.clone().sub(at).setY(0.4).normalize(), sid); n++; }
+  if (stage && stage.explore) for (const h of world.propsNear(at, R).filter(h => !h.prop.queued).slice(0, 4)) {
+    const c = h.box.getCenter(new V3()); h.prop.queued = true; propQ.push({ h, plane: planeOf(c), push: c.clone().sub(at).setY(0).normalize(), sid });
+  }
+}
+function tsubame(dx, dy) {
+  const flip = flipping(); player.flip = 0;
+  player.aeroUsed = true; player.aero = { kind: 'tsubame', t: 0, dur: flip ? 0.55 : 0.5, dir: dx >= 0 ? 1 : -1, flip };
+  player.vy = Math.max(player.vy, flip ? 4 : 3.2);   // hangs a moment
+  floater(flip ? 'ENGETSU' : 'TSUBAME GAESHI', { x: vw / 2, y: vh * 0.34 }, 'big'); fovKick = Math.max(fovKick, 5);
+  const cx = locked ? vw / 2 : ptr.sx, cy = locked ? vh / 2 : ptr.sy, L = Math.hypot(dx, dy) || 1, r = Math.min(vw, vh) * 0.3;
+  const ux = flip ? 0 : -dx / L * r, uy = flip ? r : dy / L * r;   // the flip ends in a straight overhead cleave
+  after(0.17, () => {   // the return cut: the mirrored line, longer reach, one more point of damage
+    if (state !== 'play') return;
+    const l = lvl('katana'), W = WEAP.katana, x0 = cx - ux, y0 = cy - uy, x1 = cx + ux, y1 = cy + uy; stroke++;
+    startSwing(x1 - x0, y1 - y0, 0.18); sfx.swish(1.3); slowmo(0.4, 0.2);
+    const now = performance.now(); trail.length = 0;
+    for (let i = 0; i <= 8; i++) trail.push({ x: x0 + (x1 - x0) * i / 8, y: y0 + (y1 - y0) * i / 8, t: now - (8 - i) * 8 });
+    sliceSeg([x0, y0, x1, y1], x0, y0, x1, y1, W.range(l) + 2.5, W.dmg(l) + 1, stroke, 'katana');
+  });
+}
+function whirl() {
+  const id = 'kusarigama', l = lvl(id), W = WEAP[id], R = Math.min(11, 6 + l), dmg = W.dmg(l), sid = ++stroke, at = player.pos.clone(), flip = flipping(); player.flip = 0;
+  cds[id] = W.cd(l); player.aeroUsed = true; player.aero = { kind: 'whirl', t: 0, dur: 0.6, flip }; player.vy = Math.max(player.vy, 2.6);
+  fling.on = true; fling.whirl = { t: 0, dur: 0.6, r: R, a0: player.yaw + Math.PI, flip }; fling.mesh.visible = fling.chain.visible = true;
+  floater(flip ? 'KAITEN · TATE' : 'KAITEN', { x: vw / 2, y: vh * 0.34 }, 'big'); sfx.swish(0.7); after(0.2, () => sfx.swish(0.8)); after(0.4, () => sfx.swish(0.9));
+  const a0 = player.yaw + Math.PI;
+  for (const e of enemies.slice()) {
+    const dx = e.x - at.x, dz = e.z - at.z, d = Math.hypot(dx, dz); if (d - e.d.w > R * (flip ? 1.3 : 1)) continue;
+    if (flip && (dx * -Math.sin(player.yaw) + dz * -Math.cos(player.yaw)) / (d || 1) < 0.35) continue;   // the vertical whirl reaches further, but only ahead
+    const ang = flip ? d / (R * 1.3) * TAU * 0.5 : ((Math.atan2(dx, dz) - a0) % TAU + TAU) % TAU;   // the sickle reaches each foe as it sweeps round
+    after(0.04 + ang / TAU * 0.4, () => {
+      if (!enemies.includes(e)) return;
+      const { c, out, push } = radialCut(e, player.pos, 0.2), n = new V3(0, 1, 0).addScaledVector(out, rnd(-0.25, 0.25)).normalize();
+      aeroHit(e, new THREE.Plane().setFromNormalAndCoplanarPoint(n, c), push, dmg, sid, id);
+    });
+  }
+  for (const q of eProj.slice()) if (Math.hypot(q.p.x - at.x, q.p.z - at.z) < R) removeEProj(q);
+  after(0.25, () => aeroScenery(at, R, sid, c => new THREE.Plane().setFromNormalAndCoplanarPoint(new V3(rnd(-0.2, 0.2), 1, rnd(-0.2, 0.2)).normalize(), c)));
+}
+function plunge() {
+  const id = 'naginata', flip = flipping(); cds[id] = WEAP[id].cd(lvl(id)); player.aeroUsed = true;
+  player.plunge = { l: lvl(id), flip, t0: T }; player.vy = flip ? -12 : -24; player.flip = 0;   // the flip variant somersaults first, then drives down
+  sfx.swish(0.6); fovKick = Math.max(fovKick, 7);
+}
+function plungeLand() {
+  const l = player.plunge.l, W = WEAP.naginata, R = 4 + l * 0.45, dmg = W.dmg(l) + 1, sid = ++stroke, at = player.pos.clone();
+  player.plunge = null; player.aero = { kind: 'impact', t: 0, dur: 0.35 }; wrapHips();
+  floater('RAKURAI', { x: vw / 2, y: vh * 0.34 }, 'big');
+  fx.dust(new V3(at.x, 0, at.z), 40, R * 0.5); fx.sparks(new V3(at.x, 0.3, at.z), 50, 0xffd0a0, 8); fx.flash(new V3(at.x, 0.4, at.z), UP, new V3(1, 0, 0), R * 1.5);
+  sfx.thud(1.8); sfx.slice(1.3); shake = Math.max(shake, 0.75); hitStop = Math.max(hitStop, 0.07); landDip = 0.14;
+  for (const e of enemies.slice()) {
+    if (Math.hypot(e.x - at.x, e.z - at.z) - e.d.w > R) continue;
+    const { c, out, push } = radialCut(e, at, 0.7), n = new V3(-out.z, 0, out.x);   // a vertical cut, across the line from the impact
+    aeroHit(e, new THREE.Plane().setFromNormalAndCoplanarPoint(n, c), push, dmg, sid, 'naginata');
+  }
+  aeroScenery(at, R, sid, c => { const o = new V3(c.x - at.x, 0, c.z - at.z).normalize(); return new THREE.Plane().setFromNormalAndCoplanarPoint(new V3(-o.z, 0.15, o.x).normalize(), c); });
+}
+// the hero's body during an aerial attack (layered over the normal pose)
+function aeroPose(P) {
+  const A = player.aero;
+  if (player.plunge) {   // blade high over the head, pointing down, both hands on the shaft
+    const pl = player.plunge, u = (T - pl.t0) / 0.38;
+    if (pl.flip && !pl.flipped) {
+      if (u < 1) { P.hips.rotation.x = TAU * smooth(u); P.legL.rotation.x = P.legR.rotation.x = -1.5; P.kneeL.rotation.x = P.kneeR.rotation.x = 2.2; }
+      else { pl.flipped = true; wrapHips(); player.vy = -24; }   // out of the somersault: drive down
+    }
+    P.armR.rotation.set(-2.9, 0, -0.2); P.elbowR.rotation.x = -0.25; P.armL.rotation.set(-2.6, 0, 0.3); P.elbowL.rotation.x = -0.5;
+    P.torso.rotation.y = 0; P.head.rotation.x = 0.35;
+    return;
+  }
+  if (!A) return;
+  const t = A.t / A.dur;
+  if (A.kind === 'tsubame' && A.flip) {   // a tight front somersault, the blade carried round overhead
+    P.hips.rotation.x = TAU * smooth(t); P.legL.rotation.x = P.legR.rotation.x = -1.5; P.kneeL.rotation.x = P.kneeR.rotation.x = 2.2;
+    P.armR.rotation.set(-2.4 + 1.2 * t, 0, -0.2); P.elbowR.rotation.x = -0.25; P.armL.rotation.set(-1.6, 0, 0.3); P.elbowL.rotation.x = -0.9;
+  } else if (A.kind === 'whirl' && A.flip) {   // somersaulting with the chain looping out in front
+    P.hips.rotation.x = TAU * smooth(t); P.legL.rotation.x = P.legR.rotation.x = -1.4; P.kneeL.rotation.x = P.kneeR.rotation.x = 2.0;
+    P.armR.rotation.set(-1.7, 0, -0.3); P.elbowR.rotation.x = -0.15; P.armL.rotation.set(-0.8, 0, 0.6);
+  } else if (A.kind === 'tsubame') { hero.rotation.y += A.dir * TAU * smooth(t); P.hips.rotation.x = 0.18; P.legL.rotation.x = -1.2; P.kneeL.rotation.x = 1.8; P.legR.rotation.x = -0.4; P.kneeR.rotation.x = 1.1; }   // the whole body turns with the cut, knees tucked
+  else if (A.kind === 'whirl') {   // spinning with the chain, sickle arm flung out level
+    hero.rotation.y += TAU * 1.5 * t; P.armR.rotation.set(-1.55, 0, -1.25); P.elbowR.rotation.x = -0.15; P.armL.rotation.set(-0.4, 0, 0.9);
+    P.legL.rotation.x = -1.0; P.kneeL.rotation.x = 1.6; P.legR.rotation.x = -0.2; P.kneeR.rotation.x = 0.9;
+  } else if (A.kind === 'impact') {   // crouched over the planted blade, then rising
+    const f = 1 - smooth(t); P.armR.rotation.x = -0.4 * f - 0.7 * (1 - f); P.elbowR.rotation.x = -0.3; P.hips.rotation.x = 0.12 + 0.6 * f; P.head.rotation.x = 0.3 * f;
+    P.legL.rotation.x = -1.2 * f; P.kneeL.rotation.x = 1.9 * f + 0.1; P.legR.rotation.x = 0.5 * f; P.kneeR.rotation.x = 1.4 * f + 0.1;
+  }
+}
+
 /* ============ kusarigama fling ============ */
 const fling = { on: false, t: 0, dur: 0.62, a: new V3(), b: new V3(), dist: 12, mesh: null, chain: null };
 function buildFling() {
@@ -693,6 +834,17 @@ function doFling(x0, y0, x1, y1) {
 }
 function updFling(dt) {
   if (!fling.on) return;
+  if (fling.whirl) {   // aerial whirlwind: the sickle circles the hero on its chain
+    const W = fling.whirl; W.t += dt;
+    if (W.t >= W.dur) { fling.on = false; fling.whirl = null; fling.mesh.visible = fling.chain.visible = false; return; }
+    const a = W.a0 + (W.t / W.dur) * TAU * 1.5, h = throwOrigin(), r = W.r * Math.min(1, W.t / 0.08) * Math.min(1, (W.dur - W.t) / 0.1 + 0.3);
+    const fx_ = -Math.sin(player.yaw), fz = -Math.cos(player.yaw), va = (W.t / W.dur) * TAU * 1.5;   // flip: a vertical loop out in front
+    const p = W.flip ? new V3(player.pos.x + fx_ * Math.sin(va) * r * 0.8, Math.max(0.2, player.y + 1.1 + Math.cos(va) * r * 0.45), player.pos.z + fz * Math.sin(va) * r * 0.8)
+      : new V3(player.pos.x + Math.sin(a) * r, player.y + 1.1, player.pos.z + Math.cos(a) * r);
+    fling.mesh.position.copy(p); fling.mesh.rotation.set(0, a + Math.PI / 2, W.t * 40);
+    fling.chain.position.copy(h); const d = p.clone().sub(h); fling.chain.scale.set(1, d.length(), 1); fling.chain.quaternion.setFromUnitVectors(YAX, d.normalize());
+    return;
+  }
   fling.t += dt / fling.dur;
   if (fling.t >= 1) { fling.on = false; fling.mesh.visible = fling.chain.visible = false; return; }
   const s = fling.t, r = fling.dist * Math.sin(Math.PI * Math.min(1, s * 1.05));
@@ -784,12 +936,20 @@ const PROP_CUTS_PER_FRAME = 2, MAX_STROKE_PROPS = 6;
 let propQ = [];
 function sliceProps(seg, sp, range, sid) {
   const hits = [];
-  for (const h of world.propsNear(player.pos, range + 1.5)) {
+  for (const h of world.propsNear(player.pos, range + 1.5, true)) {
     if (h.prop.queued) continue;
-    const r = boxRect(h.box); if (r && segRect(seg, r)) hits.push([h.box.distanceToPoint(player.pos), h]);
+    const r = boxRect(h.box); if (!r || !segRect(seg, r)) continue;
+    if (h.prop.town) { glance(h, sid); continue; }   // houses and the town's stalls, well and board: the blade glances off
+    hits.push([h.box.distanceToPoint(player.pos), h]);
   }
   hits.sort((a, b) => a[0] - b[0]);
   for (const [, h] of hits.slice(0, MAX_STROKE_PROPS)) { h.prop.queued = true; propQ.push({ h, plane: sp.plane.clone(), push: sp.push.clone(), sid }); }
+}
+// a blade turned by timber and plaster: a spark, a scratch of sound, a nudge of the camera, once per stroke
+function glance(h, sid) {
+  if (h.prop.glanced === sid) return; h.prop.glanced = sid;
+  const at = h.box.clampPoint(new V3(player.pos.x, player.y + 1.2, player.pos.z), new V3());
+  fx.sparks(at, 8, 0xffe0b0, 2.5); fx.dust(at, 3, 0.25); sfx.clang(); shake = Math.max(shake, 0.06);
 }
 function updPropCuts() {
   for (let k = 0; k < PROP_CUTS_PER_FRAME && propQ.length; k++) { const q = propQ.shift(); q.h.prop.queued = false; cutProp(q.h, q.plane, q.push, q.sid); }
@@ -1256,19 +1416,25 @@ const STORM_CINE = { name: 'BLADE STORM', strike: STORM_DRAW, fast: [0.45], end:
   sheathed: [[0, 0.5], [2.48, 99]],
   keys: [hold(K_SET, 0), hold(IAI_SET, 0.45), hold(IAI_CUT, STORM_DRAW), hold(IAI_CUT, 2.15), K_SHEATHE, hold(K_SHEATHE, 2.7), [3.1, ...K_READY.slice(1)]],
   events: [[STORM_DRAW, stormDraw], [STORM_SHEATHE, stormSheathe]] };
-// Sky Storm, the aerial Blade Storm: from a jump he soars up, draws in a whirlwind spin at the top that marks
-// every enemy below, floats down holding the follow-through, lands, and they fall apart at the click of the sheath.
-const SKY_DRAW = 0.75, SKY_SHEATHE = 2.65;
-const SKY_CINE = { name: 'SKY STORM', title: 'SKY STORM', kanji: '天嵐', air: true, strike: SKY_DRAW, sheatheAt: SKY_SHEATHE, fast: [0.6], end: 3.1, flick: false,
+// Sky Storm, the aerial Blade Storm: from a jump he soars up with a backflip, draws in a whirlwind spin at the top
+// that marks every enemy below (knees drawn up, eyes on the field), hangs a heartbeat, then drops fast, legs reaching
+// for the ground, into a crouched landing. He holds the follow-through on the ground, and they fall apart at the
+// click of the sheath.
+const SKY_DRAW = 0.7, SKY_LAND = 1.3, SKY_SHEATHE = 2.65;
+const SKY_CINE = { name: 'SKY STORM', title: 'SKY STORM', kanji: '天嵐', air: true, strike: SKY_DRAW, sheatheAt: SKY_SHEATHE, fast: [0.55], end: 3.1, flick: false,
   cam: [2.2, -0.2, -1.4], camD: [4.4, 0, 2.4], camH: [1.2, 0, 1.2], camT: [1.1, 0, 0.1], lift: [0.75, 1.0],   // the camera rides up with him
-  path: [[0, 0, null], [0.55, 0, 4.2, 2], [SKY_DRAW, 0, 4.5], [2.0, 0, 3.4], [2.25, 0, 0, 1], [3.1, 0, 0]], sheathed: [[0, 0.55], [2.55, 99]],
-  keys: [A_LAUNCH, A_TUCK(0.45, -TAU), [0.6, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.3, 0, -1.0, 1.6, -0.4, 1.2, 0, 0.5, -0.05, 0],
-    [SKY_DRAW, -1.5, 1.15, -0.05, 0.35, -0.25, -0.3, -TAU + 0.1, 0, -0.5, 0.7, 0.2, 0.4, 0, -0.6, 0, 2 * TAU],
-    [2.0, -1.5, 1.15, -0.05, 0.35, -0.25, -0.3, -TAU + 0.1, 0, -0.6, 0.9, 0.1, 0.5, 0, -0.6, 0.1, 2 * TAU + 0.6],
-    A_LAND(2.25, -TAU, 2 * TAU + 0.6), [2.5, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.15, 0.1, -0.4, 0.5, 0.1, 0.4, 1, 0.3, 0, 2 * TAU + 0.6],
+  path: [[0, 0, null], [0.5, 0, 4.2, 2], [SKY_DRAW, 0, 4.6, 2], [1.0, 0, 4.2], [SKY_LAND, 0, 0, 1], [3.1, 0, 0]], sheathed: [[0, 0.55], [2.55, 99]],
+  keys: [A_LAUNCH, A_TUCK(0.4, -TAU),
+    [0.55, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.2, 0, -1.1, 1.8, -0.5, 1.4, 0, 0.5, -0.05, 0],                       // out of the flip, hand on the hilt, knees up
+    [SKY_DRAW, -1.5, 1.15, -0.05, 0.35, -0.25, -0.3, -TAU + 0.25, 0, -1.2, 1.9, -0.6, 1.6, 0, -0.6, 0.2, 2 * TAU],            // the whirlwind draw: a full turn
+    [1.0, -1.4, 1.0, -0.1, 0.3, -0.2, -0.4, -TAU + 0.45, 0, -1.0, 1.6, -0.4, 1.2, 0, -0.5, 0.35, 2 * TAU + 0.3],              // tipping forward over the field
+    [1.2, -1.5, 1.1, -0.05, 0.4, -0.3, -0.3, -TAU + 0.15, 0, -0.6, 0.8, -0.1, 0.45, 0, -0.6, 0.2, 2 * TAU + 0.5],             // dropping, legs reaching down
+    A_LAND(SKY_LAND, -TAU, 2 * TAU + 0.6), hold(A_LAND(0, -TAU, 2 * TAU + 0.6), 2.35),                                          // lands crouched, blade swept out: zanshin
+    [2.5, -0.35, -0.6, -1.5, -0.2, 0.45, -1.2, -TAU + 0.15, 0.1, -0.4, 0.5, 0.1, 0.4, 1, 0.3, 0, 2 * TAU + 0.6],
     A_READY(3.1, -TAU, 2 * TAU + 0.6)],
-  events: [[SKY_DRAW, () => { stormDraw(); fx.sparks(heroP.handR.getWorldPosition(new V3()), 60, 0xffffff, 9); }], [2.25, () => airLand(1.3)], [SKY_SHEATHE, stormSheathe]] };
+  events: [[SKY_DRAW, () => { stormDraw(); if (!(REC && QS.get('shot'))) fx.sparks(heroP.handR.getWorldPosition(new V3()), 60, 0xffffff, 9); }], [SKY_LAND, () => airLand(1.4)], [SKY_SHEATHE, stormSheathe]] };
 function storm() {
+  unsheathe();
   if (ult < 100 || state !== 'play' || finish) return;
   const v = airborne() ? SKY_CINE : STORM_CINE;
   ult = 0; if (tut) tut.flags.storm = true; sfx.ult(); slowmo(0.2, (v.sheatheAt || STORM_SHEATHE) + 0.2);
@@ -1358,7 +1524,8 @@ function clearField() {
   for (const q of propQ) q.h.prop.queued = false; propQ = [];
   clearTrial(); removeWisp(); wispT = 8; clearCitizens(); errand = null; charmMark = -1; updQuest();
   guide = null; $('tutSkip').textContent = 'Skip tutorial';
-  fling.on = false; fling.mesh.visible = fling.chain.visible = false;
+  fling.on = false; fling.whirl = null; fling.mesh.visible = fling.chain.visible = false;
+  player.plunge = player.aero = null;
 }
 function startStage(n) {
   clearField();
@@ -1490,7 +1657,7 @@ const trail = [], stormLines = [];
 const canvas = $('c');
 const needLock = () => !sdk.touch && !lockFail && !locked;
 function requestLock() {
-  if (sdk.touch || lockFail || locked || (DEV && QS.has('sim'))) return;
+  if (sdk.touch || lockFail || locked || (DEV && (QS.has('sim') || REC))) return;
   try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { lockFail = true; }
 }
 const exitLock = () => { try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {} };
@@ -1504,6 +1671,7 @@ document.addEventListener('pointerlockerror', () => {
   updLockUI();
 });
 function beginStroke(x, y) {
+  unsheathe();
   Object.assign(ptr, { down: true, x, y, sx: x, sy: y, lx: x, ly: y, lt: performance.now(), swept: false });
   stroke++; trail.length = 0; trail.push({ x, y, t: performance.now() });
   const W = WEAP[cur];
@@ -1519,7 +1687,7 @@ function endStroke() {
   if (state !== 'play') return;
   const W = WEAP[cur], L = Math.hypot(ptr.x - ptr.sx, ptr.y - ptr.sy);
   if (W.mode === 'swipe' && ptr.cutT) { endSwing(); return; }
-  if (W.mode === 'fling') { if (cds[cur] <= 0) { if (L > 45) doFling(ptr.sx, ptr.sy, ptr.x, ptr.y); else quickSlash(); } }
+  if (W.mode === 'fling') { if (cds[cur] <= 0) { if (aeroReady()) whirl(); else if (L > 45) doFling(ptr.sx, ptr.sy, ptr.x, ptr.y); else quickSlash(); } }
   else if ((W.mode === 'swipe' || W.mode === 'sweep') && L < 22) quickSlash();
 }
 let quickFlip = false;
@@ -1530,8 +1698,10 @@ function quickSlash() {
   quickFlip = !quickFlip;
   const a = quickFlip ? -0.65 : Math.PI + 0.65, r = Math.min(vw, vh) * 0.26;
   const x0 = cx - Math.cos(a) * r, y0 = cy + Math.sin(a) * r, x1 = cx + Math.cos(a) * r, y1 = cy - Math.sin(a) * r;
-  if (W.mode === 'fling') { doFling(x0, y0, x1, y1); return; }
+  if (W.mode === 'fling') { if (aeroReady()) whirl(); else doFling(x0, y0, x1, y1); return; }
+  if (W.mode === 'sweep' && cds[cur] <= 0 && aeroReady()) { plunge(); return; }
   if (W.mode === 'sweep' || W.mode === 'swipe') { if (cds[cur] > 0) return; cds[cur] = W.cd(l); }
+  if (cur === 'katana' && aeroReady()) tsubame(x1 - x0, y1 - y0);
   stroke++;
   const now = performance.now(); trail.length = 0;
   for (let i = 0; i <= 8; i++) trail.push({ x: x0 + (x1 - x0) * i / 8, y: y0 + (y1 - y0) * i / 8, t: now - (8 - i) * 8 });
@@ -1584,14 +1754,15 @@ function moveTo(x, y) {
     if (L < 9) return;
     if (!ptr.live && cds[cur] <= 0) ptr.live = true;   // still dragging when the blade is ready again: the next swing starts
     if (!ptr.live) { ptr.lx = x; ptr.ly = y; return; }
-    if (!ptr.cutT) ptr.cutT = now; else if (now - ptr.cutT > SWING_T) { endSwing(); return; }
+    if (!ptr.cutT) { ptr.cutT = now; if (cur === 'katana' && aeroReady()) tsubame(dx, dy); } else if (now - ptr.cutT > SWING_T) { endSwing(); return; }
     const l = lvl(cur);
     if (now - ptr.lastSwing > 200 && L > 14) { startSwing(dx, dy); sfx.swish(1); ptr.lastSwing = now; }
     sliceSeg([ptr.lx, ptr.ly, x, y], ptr.lx, ptr.ly, x, y, W.range(l), W.dmg(l), stroke, cur);
     ptr.lx = x; ptr.ly = y;
   } else if (W.mode === 'sweep') {
     const tx = x - ptr.sx, ty = y - ptr.sy, TL = Math.hypot(tx, ty);
-    if (!ptr.swept && TL > 70 && cds[cur] <= 0) {
+    if (!ptr.swept && TL > 70 && cds[cur] <= 0 && aeroReady()) { ptr.swept = true; plunge(); }
+    else if (!ptr.swept && TL > 70 && cds[cur] <= 0) {
       ptr.swept = true;
       const l = lvl(cur);
       cds[cur] = W.cd(l);
@@ -1682,21 +1853,23 @@ function updPlayer(dt) {
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   const wx = ix * cy + iz * sy, wz = -ix * sy + iz * cy;
   player.moveDir.set(wx, 0, wz);
-  const k = Math.min(1, dt * 12);
+  // momentum: speed builds up and bleeds off over a fraction of a second, and there is little steering in the air
+  const k = 1 - Math.exp(-dt * (!player.ground ? 3.5 : ix || iz ? 9 : 11));
   player.wade = stage && stage.explore && player.y < 0.15 && world.inWater(player.pos);   // wading through ponds, paddies, the moat
   const spd = SPEED * CH().speed * (player.wade ? 0.55 : 1);
   if (player.wade && Math.hypot(player.vel.x, player.vel.z) > 1 && Math.random() < dt * 10) fx.sparks(new V3(player.pos.x, 0.25, player.pos.z), 3, 0xd8ecff, 1.6);
   player.vel.x += (wx * spd - player.vel.x) * k; player.vel.z += (wz * spd - player.vel.z) * k;
   const p = player.pos;
   p.x += player.vel.x * dt; p.z += player.vel.z * dt;
-  if (player.dashT > 0) { player.dashT -= dt; p.addScaledVector(player.dashDir, 21 * dt); }
+  if (player.dashT > 0) { p.addScaledVector(player.dashDir, 33 * Math.pow(player.dashT / 0.18, 0.6) * dt); player.dashT -= dt; }   // bursts out, then eases off
   if (player.dashCD > 0) { player.dashCD -= dt; if (player.dashCD <= 0) $('dashBtn').classList.remove('cd'); }
   world.collide(p, PLAYER_R, player.y);   // props and walls (low ones can be jumped); in a fight, the arena edge
   const sp = Math.hypot(player.vel.x, player.vel.z);
   if (!player.ground) {
     player.vy -= 22 * dt; player.y += player.vy * dt;
-    if (player.y <= 0) { player.y = 0; player.vy = 0; player.ground = true; player.jumps = 0; landDip = 0.14; fx.dust(new V3(p.x, 0, p.z), 12, 1); sfx.thud(0.45); }
+    if (player.y <= 0) { player.y = 0; player.vy = 0; player.ground = true; player.jumps = 0; landDip = 0.14; fx.dust(new V3(p.x, 0, p.z), 12, 1); sfx.thud(0.45); player.aeroUsed = false; if (player.plunge) plungeLand(); }
   }
+  if (player.aero && (player.aero.t += dt) >= player.aero.dur) { if (player.aero.flip) wrapHips(); player.aero = null; }   // a finished somersault leaves the hips at a whole turn: wrap, so nothing unwinds
   if (player.flip > 0) { player.flip += dt / 0.55; if (player.flip >= 1) { player.flip = 0; if (heroP.hips) heroP.hips.rotation.x = 0; } }
   player.bob += dt * sp * 1.9 * (player.ground ? 1 : 0); player.bobAmt += ((sp > 1 ? 1 : 0) - player.bobAmt) * Math.min(1, dt * 8);
 }
@@ -1708,13 +1881,14 @@ function showJoy() {
   j.firstElementChild.style.transform = `translate(${joy.x * 56}px,${joy.y * 56}px)`;
 }
 function updLockUI() {
-  const show = state === 'play' && needLock() && !talkNPC && !(DEV && QS.has('sim'));
+  const show = state === 'play' && needLock() && !talkNPC && !(DEV && (QS.has('sim') || REC));
   $('lockHint').classList.toggle('hidden', !show);
   $('cross').classList.toggle('hidden', !(state === 'play' && locked));
 }
 function resumeAndLock() { requestLock(); resume(); }
 
 function selectWeapon(id) {
+  unsheathe();
   if (!has(id)) { toast(`${WEAP[id].name} is locked: unlock it in the Arsenal`); return; }
   if (cur === id) return;
   cur = id; save.cur = id; sfx.click(); drawT = T; sfx.swish(0.3);
@@ -2088,21 +2262,29 @@ function animHero(dt) {
   P.legL.rotation.x = -s * 0.9 - 0.14 * idle; P.legR.rotation.x = s * 0.9 + 0.1 * idle;
   P.kneeL.rotation.x = 0.1 + Math.max(0, c) * 1.2 * sp + 0.2 * idle; P.kneeR.rotation.x = 0.1 + Math.max(0, -c) * 1.2 * sp + 0.12 * idle;
   kz(P.legL, -0.08 * idle); kz(P.legR, 0.08 * idle); kz(P.hips, -rgt * 0.22); kz(P.armL, 0.25 * idle); P.torso.rotation.z *= 1 - k;
+  const kl = 1 - Math.exp(-dt * 18), tx = (o, v) => { o.rotation.x += (v - o.rotation.x) * kl; };
   if (player.flip > 0) {   // tucked front flip, arms hugging the shins
     const f = Math.sin(Math.PI * player.flip);
     P.hips.rotation.x = Math.PI * 2 * smooth(player.flip);
     P.legL.rotation.x = P.legR.rotation.x = -1.5 * f; P.kneeL.rotation.x = P.kneeR.rotation.x = 2.2 * f;
-  } else if (!player.ground) {   // knees tucked on the way up, legs reaching for the ground on the way down
-    const up = clamp(player.vy / 7, 0, 1), dn = clamp(-player.vy / 9, 0, 1);
-    rotTo(P.hips, 0.1 + 0.15 * up - 0.1 * dn, k);
-    P.legL.rotation.x = -0.9 - 0.4 * up + 0.4 * dn; P.legR.rotation.x = 0.3 - 0.5 * up - 0.1 * dn;
-    P.kneeL.rotation.x = 1.4 + 0.4 * up - 0.8 * dn; P.kneeR.rotation.x = 0.6 + 0.6 * up - 0.3 * dn;
-  } else rotTo(P.hips, 0.12 + sp * 0.2 + (player.dashT > 0 ? 0.5 : 0) + ld * 0.35 - hurt * 0.5, k);
-  P.hips.position.y = RIG.hips.y + Math.abs(c) * 0.05 * sp + br * 0.008 * idle - ld * 0.2;
-  if (ld > 0) { P.legL.rotation.x -= ld * 0.55; P.legR.rotation.x -= ld * 0.35; P.kneeL.rotation.x += ld * 1.1; P.kneeR.rotation.x += ld * 0.8; }
+  } else {
+    let lL, lR, nL, nR;
+    if (player.plunge) { rotTo(P.hips, 0.55, k); lL = -1.3; lR = -0.2; nL = 1.9; nR = 0.6; }   // plunging: one knee driven down, leaning into the dive
+    else if (!player.ground) {   // knees tucked on the way up, legs reaching for the ground on the way down
+      const up = clamp(player.vy / 7, 0, 1), dn = clamp(-player.vy / 9, 0, 1);
+      rotTo(P.hips, 0.1 + 0.15 * up - 0.1 * dn, k);
+      lL = -0.9 - 0.4 * up + 0.4 * dn; lR = 0.3 - 0.5 * up - 0.1 * dn; nL = 1.4 + 0.4 * up - 0.8 * dn; nR = 0.6 + 0.6 * up - 0.3 * dn;
+    } else {
+      rotTo(P.hips, 0.12 + sp * 0.2 + (player.dashT > 0 ? 0.5 : 0) + ld * 0.35 - hurt * 0.5, k);
+      lL = -s * 0.9 - 0.14 * idle; lR = s * 0.9 + 0.1 * idle; nL = 0.1 + Math.max(0, c) * 1.2 * sp + 0.2 * idle; nR = 0.1 + Math.max(0, -c) * 1.2 * sp + 0.12 * idle;
+    }
+    if (ld > 0) { lL -= ld * 0.55; lR -= ld * 0.35; nL += ld * 1.1; nR += ld * 0.8; }   // landing: soaked up in the knees
+    tx(P.legL, lL); tx(P.legR, lR); tx(P.kneeL, nL); tx(P.kneeR, nR);
+  }
+  P.hips.position.y += (RIG.hips.y + Math.abs(c) * 0.05 * sp + br * 0.008 * idle - ld * 0.2 - P.hips.position.y) * kl;
   const air = player.flip > 0 ? Math.sin(Math.PI * player.flip) : 0;
-  P.armL.rotation.x = s * 0.7 - 0.35 * idle - 1.1 * air - 0.8 * hurt; P.elbowL.rotation.x = -0.8 - 0.5 * idle - 0.6 * air;
-  P.torso.rotation.x = br * 0.03 * idle - hurt * 0.25;
+  tx(P.armL, s * 0.7 - 0.35 * idle - 1.1 * air - 0.8 * hurt); tx(P.elbowL, -0.8 - 0.5 * idle - 0.6 * air);
+  tx(P.torso, br * 0.03 * idle - hurt * 0.25);
   P.head.rotation.x = -player.pitch * 0.4 - hurt * 0.35;
   P.ribbon.rotation.x = 0.75 + sp * 0.9 + (player.ground ? 0 : 0.7) + (player.dashT > 0 ? 0.6 : 0) + Math.sin(T * 13) * 0.08 * (0.3 + sp);   // headband tails stream behind
   P.ribbon.rotation.z = Math.sin(T * 7) * 0.06 * (0.3 + sp) - rgt * 0.3;
@@ -2119,13 +2301,16 @@ function animHero(dt) {
     P.torso.rotation.y += (-0.35 - P.torso.rotation.y) * k; P.armL.rotation.x = 0.4;
   } else {
     const k2 = 1 - Math.exp(-dt * 9);   // the blade drifts back to guard instead of snapping
-    rotTo(P.armR, -0.7 - 0.6 * air - 0.2 * idle - 1.4 * Math.max(0, 1 - (T - drawT) / 0.3), k2);   // a new weapon is drawn up over the shoulder P.armR.rotation.z *= 1 - k2; rotTo(P.elbowR, -0.9 - 0.4 * air, k2);
+    rotTo(P.armR, -0.7 - 0.6 * air - 0.2 * idle - 1.4 * Math.max(0, 1 - (T - drawT) / 0.3), k2);   // a new weapon is drawn up over the shoulder
+    P.armR.rotation.z *= 1 - k2; rotTo(P.elbowR, -0.9 - 0.4 * air, k2);
     P.torso.rotation.y += (-s * 0.22 - P.torso.rotation.y) * k2;   // shoulders counter-swing the stride
     P.head.rotation.y = -P.torso.rotation.y * 0.8;
   }
+  aeroPose(P);
   if (finish) finishPose(P); else dashPose(P);
+  relaxPose(P, dt, s, br);
   const shown = finish ? 'katana' : cur;
-  for (const id of WIDS) heroW[id].visible = id === shown;
+  for (const id of WIDS) heroW[id].visible = id === shown && relaxK < 0.5;
   const sh = finish && finish.v.sheathed && finish.v.sheathed.some(([a, b]) => T - finish.t0 >= a && T - finish.t0 < b);
   heroW.katana.rotation.x = sh ? -Math.PI / 2 - 0.35 : Math.PI / 2 + 0.25;   // reversed at the hip = sheathed
   const sk = heroW.kusarigama.getObjectByName('sickle'); if (sk) sk.visible = !fling.on;
@@ -3027,6 +3212,7 @@ function drawThreats() {
 
 let rawDt = 0;
 function frame(now) {
+  if (REC) return;   // the recorder drives the frames itself
   requestAnimationFrame(frame);
   if (DEV && QS.has('hold') && QS.has('sim')) { step(0, now); return; }   // dev: freeze on the last simulated frame
   rawDt = (now - last) / 1000;
@@ -3038,7 +3224,7 @@ function step(rdt, now, draw = true) {
   const running = state === 'play' || state === 'clearing' || state === 'gameover';
   if (slowT > 0) { slowT -= rdt; if (slowT <= 0) slowTo = 1; }
   timeScale += (slowTo - timeScale) * (1 - Math.exp(-rdt * (slowTo < timeScale ? 30 : 5)));
-  const frozen = state === 'play' && needLock() && !AUTO && !(DEV && QS.has('sim'));
+  const frozen = state === 'play' && needLock() && !AUTO && !(DEV && (QS.has('sim') || REC));
   const dt = state === 'paused' || frozen ? 0 : rdt * timeScale * (hitStop > 0 ? 0.06 : 1);
   hitStop -= rdt;
   if (state !== 'paused') for (const tm of timers.slice()) { tm.t -= rdt; if (tm.t <= 0) { timers.splice(timers.indexOf(tm), 1); tm.fn(); } }
@@ -3106,11 +3292,12 @@ function step(rdt, now, draw = true) {
   updateVM(rdt, T);
   if (!draw) return;
   if (DEV && QS.has('dbg')) renderer.info.autoReset = false;   // dev: count every pass of the frame
+  if (REC && QS.get('shot')) shotCam();
   if (composer) composer.render(); else renderer.render(scene, camera);
   if (DEV && QS.has('dbg')) { dbgDraw = `dc=${renderer.info.render.calls} tri=${(renderer.info.render.triangles / 1000).toFixed(0)}k geo=${renderer.info.memory.geometries} prog=${renderer.info.programs.length}`; renderer.info.reset(); }
   tuneRes(rawDt);
   drawTrail(performance.now());
-  drawThreats(); drawMinimap(); drawNPCTags(); drawMarkers();
+  if (!REC) { drawThreats(); drawMarkers(); } drawMinimap(); drawNPCTags();
   if (DEV && QS.has('dbg')) { frameN = (frameN || 0) + 1; document.title = `${dbgDraw} ${quality} f${frameN} cam=${save.cam} v2=${save.camV2} T${T.toFixed(1)} st=${state} en=${enemies.length} bodies=${phys.dolls.length}/${phys.rigids.length} k=${stats.kills} em=${enemies.reduce((n, e) => { e.root.traverseVisible(o => { if (o.isMesh) n++; }); return n; }, 0)} rs=${dynRes.scale.toFixed(2)} q=${stage ? stage.queue.length : -1}`; }
 }
 
@@ -3122,7 +3309,7 @@ async function boot() {
   sdk.onAdUI = updAdUI;
   sdk.onAuth = () => { loadSave(); if (state === 'menu') updMenu(); updCoins(); };
   loadSave();
-  quality = save.q || (sdk.touch || integratedGPU() ? 'low' : 'high');
+  quality = REC ? 'high' : save.q || (sdk.touch || integratedGPU() ? 'low' : 'high');   // recordings always use full quality
   document.body.classList.toggle('touch', sdk.touch);
   if (sdk.touch) $('menuHint').innerHTML = 'Left thumb: move &amp; turn · Right side: swipe to slice<br>Tap to throw · JUMP twice to flip · DASH to dodge · STORM when charged';
   $('lockHint').addEventListener('click', () => { audio.unlock(); requestLock(); });
@@ -3161,7 +3348,7 @@ async function boot() {
   const test = DEV ? QS.get('test') : null;
   if (DEV && QS.get('w') && WEAP[QS.get('w')]) { trial = QS.get('w'); }
   if (test === 'play') startStage(+(QS.get('stage') || 1));
-  if (test === 'play' && QS.get('spawn')) after(0.4, () => QS.get('spawn').split(',').forEach((k, i, all) => { const a = player.yaw + (i - (all.length - 1) / 2) * 0.5; spawnEnemy(k, player.pos.x - Math.sin(a) * 6, player.pos.z - Math.cos(a) * 6); }));   // dev: e.g. &spawn=shogun,brute
+  if ((test === 'play' || test === 'storm') && QS.get('spawn')) after(0.4, () => QS.get('spawn').split(',').forEach((k, i, all) => { const a = player.yaw + (i - (all.length - 1) / 2) * 0.5; spawnEnemy(k, player.pos.x - Math.sin(a) * 6, player.pos.z - Math.cos(a) * 6); }));   // dev: e.g. &spawn=shogun,brute
   if (test === 'arsenal') $('arsenalBtn').click();
   if (test === 'chars') { $('charsBtn').click(); if (QS.get('ch')) { chSel = QS.get('ch'); renderChars(); } }   // dev: character screen
   if (DEV && QS.get('dash')) after(+(QS.get('dashAt') || 1), () => { const m = { F: [0, -1], B: [0, 1], L: [-1, 0], R: [1, 0] }[QS.get('dash')], sy = Math.sin(player.yaw), cy = Math.cos(player.yaw); player.moveDir.set(m[0] * cy + m[1] * sy, 0, -m[0] * sy + m[1] * cy); dash(); });   // dev: &dash=F|B|L|R
@@ -3176,6 +3363,7 @@ async function boot() {
   if (test === 'explore' && QS.get('slash')) for (let k = 0; k < +QS.get('slash'); k++) after(1 + k * 0.5, () => { const f = k % 2 ? -1 : 1, x0 = vw * 0.5 - vw * 0.2 * f, y0 = vh * 0.3, x1 = vw * 0.5 + vw * 0.2 * f, y1 = vh * 0.7; stroke++; sliceSeg([x0, y0, x1, y1], x0, y0, x1, y1, +(QS.get('range') || 6), 1, stroke, 'katana'); });   // dev: &slash=N cuts through the screen centre
   if (DEV && QS.get('yaw')) after(0.1, () => { player.yaw = +QS.get('yaw'); });
   if (test === 'explore' && (QS.has('time') || QS.has('wx'))) { if (QS.has('time')) dayT = +QS.get('time'); if (QS.has('wx')) wx = { from: QS.get('wx'), to: QS.get('wx'), k: 1, t: 999 }; skyAcc = envAcc = 9; }   // dev: &time=0..1 (0 dawn, .25 day, .5 dusk, .75 night), &wx=rain|storm|fog|cloudy
+  if (DEV && QS.get('aero')) after(1, () => { jump(); if (QS.has('flip')) after(0.15, jump); after(0.3, () => ({ katana: () => tsubame(1, -0.4), kusarigama: whirl, naginata: plunge })[QS.get('aero')]()); });   // dev: &aero=katana|kusarigama|naginata (&flip: from a double jump)
   if (test === 'explore' && QS.has('raid')) after(1, () => startRaid(townAt()));   // dev: &raid starts a bandit raid on the nearest town
   if (test === 'explore' && QS.has('wisp')) after(0.5, () => { spawnWisp(1, 1.2); if (QS.has('errand')) errand = { kind: 'trial', need: 1, got: 0, text: 'Finish a spirit trial', reward: 70, name: 'Kenji' }; });   // dev: &wisp starts a spirit trial (&errand with a trial errand)
   if (test === 'explore' && (QS.has('talk') || QS.has('duel'))) after(0.5, () => { const e = makeNPC(player.pos.x, player.pos.z - 2.6); QS.has('talk') ? talk(e) : challenge(e); });   // dev: &talk / &duel
@@ -3185,5 +3373,52 @@ async function boot() {
   if (DEV && QS.get('pitch')) player.pitch = +QS.get('pitch');
   const sim = DEV ? +(QS.get('sim') || 0) : 0;           // dev: advance the simulation synchronously (headless screenshots)
   for (let i = 0; i < sim; i++) step(1 / 60, performance.now() + i * 16.7, i === sim - 1);
+  if (REC) record();
+}
+// Store art (dev only): &rec=SECONDS (or &frames=N) steps the game at &fps (default 30) on a virtual clock and posts
+// every frame (the 3D view plus the slash trails; no HUD) as a PNG to the local receiver in tools/capture.py, tagged
+// &tag. &warm=SECONDS runs the game first without recording; &title draws the game's title over the frames (covers).
+async function record() {
+  const fps = +(QS.get('fps') || 30), n = QS.has('frames') ? +QS.get('frames') : Math.round(+QS.get('rec') * fps), tag = QS.get('tag') || 'clip';
+  const t0 = performance.now(); let vt = 0; performance.now = () => t0 + vt;   // trails and timers follow the virtual clock
+  for (let i = 0, w = Math.round(+(QS.get('warm') || 0) * 60); i < w; i++) { vt += 1000 / 60; step(1 / 60, performance.now(), false); }
+  await document.fonts.load('100px Brush');
+  const out = document.createElement('canvas'), g = out.getContext('2d'); out.width = renderer.domElement.width; out.height = renderer.domElement.height;
+  for (let i = 0; i < n; i++) {
+    vt += 1000 / fps; step(1 / fps, performance.now(), true);
+    g.drawImage(renderer.domElement, 0, 0); if (!QS.has('notrail')) g.drawImage($('trail'), 0, 0, out.width, out.height);
+    if (QS.has('title')) drawTitle(g, out.width, out.height);
+    const blob = await new Promise(r => out.toBlob(r, 'image/png'));
+    await fetch(`http://localhost:8011/f/${tag}/${i}`, { method: 'POST', body: blob });
+  }
+  await fetch(`http://localhost:8011/done/${tag}`, { method: 'POST' });
+  document.title = 'rec-done';
+}
+// &shot=x,y,z,tx,ty,tz frames the camera on the hero for covers: offsets in metres from him in his own frame
+// (x right, y up, z ahead), looking at the point (0, ty, tz) plus tx to the right; &fov sets the lens
+function shotCam() {
+  const k = camera.aspect < 0.9 ? 1.3 : 1;   // tall frames: pull back so he fits
+  const [x, y, z, tx, ty, tz] = QS.get('shot').split(',').map((v, i) => +v * (i < 3 ? k : 1)), f = new V3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw)), r = new V3(-f.z, 0, f.x);
+  const o = new V3(player.pos.x, player.y, player.pos.z);
+  camera.position.copy(o).addScaledVector(r, x).addScaledVector(f, z).add(new V3(0, y, 0));
+  camera.lookAt(o.clone().addScaledVector(r, tx).addScaledVector(f, tz).add(new V3(0, ty, 0)));
+  if (QS.get('fov')) { camera.fov = +QS.get('fov'); camera.updateProjectionMatrix(); }
+  if (QS.has('light')) {   // a warm key light from the camera's side, so the hero isn't a silhouette against the sky
+    if (!shotCam.l) { shotCam.l = new THREE.DirectionalLight(0xffe2c8, 2.6); scene.add(shotCam.l, shotCam.l.target); }
+    shotCam.l.position.copy(camera.position).add(new V3(0, 2, 0)); shotCam.l.target.position.copy(o).add(new V3(0, 1, 0));
+  }
+}
+// the title as on the menu: brush lettering over a soft shade, and the red "Slice Storm" ribbon
+function drawTitle(g, w, h) {
+  const sh = g.createLinearGradient(0, h * 0.45, 0, h); sh.addColorStop(0, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,0.6)');
+  g.fillStyle = sh; g.fillRect(0, h * 0.45, w, h * 0.55);
+  let fs = Math.min(h * 0.16, w * 0.17); g.font = `${fs}px Brush`;
+  const tw = g.measureText('NINJA ARSENAL').width; if (tw > w * 0.9) { fs *= w * 0.9 / tw; g.font = `${fs}px Brush`; }
+  const y = h * (w > h ? 0.8 : 0.83); g.textAlign = 'center'; g.textBaseline = 'alphabetic'; g.lineJoin = 'round';
+  g.lineWidth = fs * 0.14; g.strokeStyle = '#0d0a08'; g.strokeText('NINJA ARSENAL', w / 2, y);
+  g.fillStyle = '#f6eedc'; g.fillText('NINJA ARSENAL', w / 2, y);
+  const rs = fs * 0.34; g.font = `${rs}px Brush`; const rw = g.measureText('SLICE  STORM').width + rs * 1.6, ry = y + rs * 0.55;
+  g.save(); g.translate(w / 2, ry + rs * 0.5); g.rotate(-0.025); g.fillStyle = '#b3201a'; g.fillRect(-rw / 2, -rs * 0.62, rw, rs * 1.24); g.restore();
+  g.fillStyle = '#fff4e6'; g.fillText('SLICE  STORM', w / 2, ry + rs * 0.85);
 }
 boot();

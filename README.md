@@ -44,7 +44,21 @@ The hero's headband is a thick, folded band. Its tails and the obi-knot tails ar
 - **Blood:** with Blood on, stumps keep spurting briefly, but nothing splatters or pools on the floor. In family mode there is no spurting, and every body vanishes in a puff of ink smoke a few seconds after it settles.
 - **Performance:** sleeping bodies merge into one mesh per material. Past 34 bodies / 60 pieces, the oldest slowly sink away.
 
+## Aerial attacks
+Three weapons attack differently in the air, once per jump (it recharges when you land):
+- **Katana, Tsubame Gaeshi:** the cut spins your whole body round (knees tucked), you hang in the air for a moment, and a return cut follows 0.17 s later along the mirrored line, with longer reach and +1 damage.
+- **Kusarigama, Kaiten:** the sickle whirls round you on its chain one and a half times, cutting every enemy (and corpse, star and, in Explore, prop) within 7-11 m as it sweeps past.
+- **Naginata, Rakurai:** you drive down blade-first. The landing cuts apart everything within 4.5-6.3 m of the impact, with +1 damage, a dust ring and a heavy shake.
+From a double jump (during or after the flip), each becomes a somersault instead:
+- **Katana, Engetsu:** a tight front flip with the blade carried round overhead, ending in a straight overhead cleave.
+- **Kusarigama, vertical Kaiten:** you somersault while the chain loops out in front of you. It reaches 30% further, but only ahead.
+- **Naginata:** a front flip first, then the drive down.
+
+Bosses and duelling rivals take the damage instead of being cut apart.
+
 ## Movement & flips
+- **At ease (Explore):** with nothing to fight within 16 m, 3 s after your last attack your ninja puts the weapon away (it disappears from the hand, and from the first-person view) and stands and walks at ease: upright, legs straight, arms hanging and swinging naturally with the stride. Any attack, Storm or weapon pick draws it again at once.
+- **Momentum:** speed builds up and bleeds off over a fraction of a second, and there is little steering in mid-air. The dash bursts out and eases off. Every joint of the hero eases toward its pose instead of snapping between running, standing and jumping, and landings are soaked up in the knees. Enemies and townsfolk ease into their stride too, and slow walkers take small steps instead of running in place.
 - **Space:** jump. Press it again in the air for a front flip, a camera roll in first person or a full tucked flip on the hero. Jumping over a strike dodges it.
 - **Air kills:** kills while airborne give **AERIAL KILL** bonus coins and slow motion.
 - **Dash:** zooms the camera with speed lines. Landing kicks up dust and dips the camera.
@@ -62,7 +76,7 @@ A killing blow that only clips an enemy's legs (a low cut) or an arm (a glancing
 ## Blade Storm
 When the Storm gauge is full, press **Q** (or tap STORM) for a cutscene: your ninja kneels into a draw stance, the blade flashes out and every enemy in range is marked with glowing cut lines. He holds the follow-through while they stand frozen, then sheathes his sword and they all fall apart on the click.
 
-**Sky Storm** (天嵐) is the aerial variant: trigger the Storm while airborne and your ninja soars high with a backflip, draws in a whirlwind spin at the top that marks every enemy below, floats down holding the follow-through, lands, and they fall apart when he sheathes.
+**Sky Storm** (天嵐) is the aerial variant: trigger the Storm while airborne and your ninja soars up with a backflip, then draws in a whirlwind spin at the top that marks every enemy below. He keeps his knees drawn up and his eyes on the field, hangs for a heartbeat, then drops fast, legs reaching for the ground, into a crouched landing that kicks up dust. He holds the follow-through on the ground (no floating), and the enemies fall apart when he sheathes.
 
 ## Playable ninja
 Pick your ninja from **Ninja** on the main menu (coins unlock them): **Kage** (balanced, free), **Hana** the kunoichi (+15% run speed, dash recharges 35% faster, 900), **Tetsu** the ronin (+1 heart, 5% slower, 1,800) and **Raiden** in the oni mask (Storm charges 30% faster, 3,200).
@@ -97,6 +111,8 @@ Map *i* unlocks when you reach stage *i* + 1. By default stages rotate through t
 - **Village elder** (at the bounty board): asks for help against **bandit raids**. Accept, and bandits pour in from the edge of town a few at a time. 12 bandits for the first raid, 3 more per raid repelled (up to 30), with tougher kinds over time. Beat them all within 150 s without leaving town. The townsfolk take shelter during the raid and cheer when it's over. A raid pays 120 coins + 20 per raid already repelled (up to +200), half again at night, and fills the Storm gauge.
 - **Townsfolk:** small talk, and news of where a spirit light was seen.
 Rivals can also hand out a raid errand. The explorer's guide has a step that leads you to the town. Merchants and elders show as white dots on the minimap.
+
+**Houses and towns are solid:** every house (in towns, the village, the mill and the huts), plus a town's stalls, well, bounty board and lanterns, can't be cut. The blade glances off with a spark, a scrape and a small nudge of the camera. Bombs, aerial attacks and the Blade Storm leave them alone too. Trees, bamboo, rocks, fences, walls and other scenery still come down.
 
 **Cutting performance:** blade strokes cut at most 6 props each, nearest first, and the cuts are queued so only 2 happen per frame. Removing a cut prop from the world re-uploads only its own slice of the merged scenery mesh and its own instance, not the whole buffer. Up to 80 cut pieces stay on the ground (the oldest settled ones sink away). Settled small pieces stop casting shadows, and crumbs sink away after 6 s.
 
@@ -164,6 +180,13 @@ Progression: coins → unlock and upgrade 6 weapons (5 levels each) + Vitality (
 - `user.systemInfo` device type â†’ mobile defaults to Low graphics
 - `data` module for saves (localStorage fallback); the auth listener reloads progress when the account changes
 - Space/arrow keys don't scroll the page, the context menu is disabled, and the game auto-pauses on blur or tab switch
+
+## Store art (covers and preview videos)
+`marketing/` holds the CrazyGames assets, rendered from the game itself:
+- Covers: `cover-landscape-1920x1080.png`, `cover-portrait-800x1200.png`, `cover-square-800x800.png` (the hero mid Sky Storm under the Blood Moon, with the title).
+- Previews: `preview-landscape-1920x1080.mp4` and `preview-portrait-1080x1620.mp4`. They are silent, about 16 s long and under 50 MB, with no HUD, cursor or text. Each opens on its cover for half a second, then shows a katana fight in a stage arena, a Sky Storm, Hōroku bombs bursting in a crowd, and a bandit raid on a town at dusk in the rain.
+
+To regenerate them, serve the game on port 8010 and run `python tools/capture.py` (or name a job: `covers`, `landscape`, `portrait`). It needs Chrome and ffmpeg. The script opens the game headless with the dev switch `&rec`, which steps the game frame by frame on a virtual clock (so slow software rendering still gives smooth 30 fps) and posts each frame (3D view plus slash trails, no HUD) to the script. ffmpeg then joins the clips. `&shot=x,y,z,tx,ty,tz` (camera offsets from the hero), `&fov`, `&light` (a key light) and `&title` frame the cover. Edit `CLIPS` and `COVER` in the script to change the shots.
 
 ## Run locally
 Serve the folder over HTTP (ES modules don't load from `file://`):
