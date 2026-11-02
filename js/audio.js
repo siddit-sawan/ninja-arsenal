@@ -98,7 +98,7 @@ const sfxRaw = {
   ult() {
     if (!ok()) return; const t = now();
     noise(t, 0.9, 'bandpass', 300, 6000, 3, 0.4); tone(t, 'sawtooth', 110, 880, 0.9, 0.12);
-    [0.95, 1.1, 1.25].forEach(d => this.sliceAt(t + d));
+    [0.95, 1.1, 1.25].forEach(d => sfxRaw.sliceAt(t + d));
   },
   sliceAt(t) { if (!ok()) return; noise(t, 0.14, 'bandpass', 1500, 6000, 2, 0.45); tone(t, 'sine', 3300, 3300, 0.4, 0.05); },
   win() {
@@ -107,7 +107,7 @@ const sfxRaw = {
   },
   lose() { if (!ok()) return; const t = now(); [440, 349, 294, 220].forEach((f, i) => pluck(t + i * 0.18, f, 0.25, sfxBus)); },
 };
-export const sfx = Object.fromEntries(Object.entries(sfxRaw).map(([k, f]) => [k, (...a) => { if (ctx && (k === 'sliceAt' || voice(k))) f(...a); }]));
+export const sfx = Object.fromEntries(Object.entries(sfxRaw).map(([k, f]) => [k, (...a) => { if (ctx && (k === 'sliceAt' || voice(k))) f.apply(sfxRaw, a); }]));
 
 
 // koto-like pluck

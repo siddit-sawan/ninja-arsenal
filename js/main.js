@@ -725,13 +725,13 @@ function aeroScenery(at, R, sid, planeOf) {   // corpses and (in explore) props 
 }
 function tsubame(dx, dy) {
   const flip = flipping(); player.flip = 0;
-  player.aeroUsed = true; player.aero = { kind: 'tsubame', t: 0, dur: flip ? 0.55 : 0.5, dir: dx >= 0 ? 1 : -1, flip };
+  player.aeroUsed = true; player.aero = { kind: 'tsubame', t: 0, dur: flip ? 0.55 : 0.5, dir: dx >= 0 ? 1 : -1, flip }; player.tsubameAt = T;
   player.vy = Math.max(player.vy, flip ? 4 : 3.2);   // hangs a moment
   floater(flip ? 'ENGETSU' : 'TSUBAME GAESHI', { x: vw / 2, y: vh * 0.34 }, 'big'); fovKick = Math.max(fovKick, 5);
   const cx = locked ? vw / 2 : ptr.sx, cy = locked ? vh / 2 : ptr.sy, L = Math.hypot(dx, dy) || 1, r = Math.min(vw, vh) * 0.3;
   const ux = flip ? 0 : -dx / L * r, uy = flip ? r : dy / L * r;   // the flip ends in a straight overhead cleave
   after(0.17, () => {   // the return cut: the mirrored line, longer reach, one more point of damage
-    if (state !== 'play') return;
+    if (state !== 'play' || finish) return;
     const l = lvl('katana'), W = WEAP.katana, x0 = cx - ux, y0 = cy - uy, x1 = cx + ux, y1 = cy + uy; stroke++;
     startSwing(x1 - x0, y1 - y0, 0.18); sfx.swish(1.3); slowmo(0.4, 0.2);
     const now = performance.now(); trail.length = 0;
@@ -1175,6 +1175,19 @@ const AIR_FINISHERS = [
     events: [[0.72, e => { finMark(e, [finPlane(finSide(e).add(new V3(0, 0.35, 0)), finNeck(e))]); sfx.swish(1.4); slowmo(0.1, 0.6); }],
       [1.1, () => airLand()], [2.05, e => { sfx.clang(); finKill(e, e.finPlanes, finSide(e).add(new V3(0, 0.4, 0))); }]] },
 ];
+// Out of an aerial M1 (Tsubame Gaeshi) the body is already spinning: this one carries that spin on instead of
+// fighting it - two more level turns falling onto him, a cut through the neck and the waist, and he parts at the flick.
+const TSUBAME_FIN = { name: 'TSUBAME OTOSHI', kanji: '燕落とし', air: true, strike: 1.15, fast: [0.55], cam: [1.35, 0.25, 0.4], camD: [5.4, 0.2, -1.6], flickAt: 2.15, end: 2.65,
+  path: [[0, 0, null], [0.5, 0.4, 2.6, 2], [1.15, 1, 0, 1], [2.65, 1, 0]],
+  keys: [[0, -0.9, -0.2, -1.2, -0.6, 0.3, -1.0, 0.2, 0, -0.9, 1.4, 0.3, 0.6, 0, 0, -0.15, 0],
+    [0.3, -1.5, 1.2, -0.3, -0.5, -0.4, -1.0, 0.25, 0, -1.2, 1.8, -0.4, 1.2, 0, -0.8, 0.2, 0],          // blade cocked across the body
+    [0.55, -1.55, -1.25, -0.15, -0.4, 0.9, -0.6, 0.15, 0, -1.0, 1.6, -0.2, 0.9, 0, 0, 0.1, 0],        // flung out level...
+    [1.15, -1.55, -1.25, -0.15, -0.4, 0.9, -0.6, 0.15, 0, -1.0, 1.6, -0.2, 0.9, 0, 0, 0.1, 2 * TAU],  // ...two whole turns on the way down
+    A_LAND(1.3, 0, 2 * TAU), A_LAND(1.9, 0, 2 * TAU), A_FLICK(2.35, 0, 2 * TAU), A_READY(2.65, 0, 2 * TAU)],
+  events: [[0.4, () => { sfx.swish(1.0); slowmo(0.25, 0.5); fovKick = Math.max(fovKick, 7); }],
+    [0.97, e => { finMark(e, [finPlane(UP.clone().add(new V3(rnd(-0.08, 0.08), 0, rnd(-0.08, 0.08))), finNeck(e))]); sfx.swish(1.3); }],
+    [1.15, e => { finMark(e, [...e.finPlanes, finPlane(UP.clone().add(new V3(rnd(-0.1, 0.1), 0, rnd(-0.1, 0.1))), finHips(e))]); sfx.swish(1.1); airLand(1.2); }],
+    [1.9, e => finKill(e, e.finPlanes, finSide(e))]] };
 // cut lines burn onto the body (he stays frozen) until finKill splits him along them
 function finMark(e, planes) {
   if (e.marks) { scene.remove(e.marks); for (const m of e.marks.children) m.geometry.dispose(); }
@@ -1202,6 +1215,7 @@ function tryFinish() {
   let vi = Math.floor(Math.random() * list.length); if (vi === last) vi = (vi + 1) % list.length;
   if (DEV && QS.get('fin')) vi = +QS.get('fin') % list.length;
   if (air) lastAirFin = vi; else lastFin = vi;
+  if (air && player.tsubameAt && T - player.tsubameAt < 0.9) { startCine(TSUBAME_FIN, e); return true; }   // straight out of an aerial M1: carry the spin on
   startCine(list[vi], e);
   return true;
 }
@@ -1230,6 +1244,9 @@ function startCine(v, e) {
     player.ground = true; player.vy = 0; player.jumps = 0; player.flip = 0;
   }
   invuln = end + 0.5; player.dashT = 0; player.dashAnim = null; player.vel.set(0, 0, 0);
+  if (player.aero && player.aero.flip) wrapHips();
+  player.aero = player.plunge = null; swing.on = false;
+  if (fling.whirl) { fling.on = false; fling.whirl = null; fling.mesh.visible = fling.chain.visible = false; }
   document.body.classList.add('cine');
   if (e) { slowmo(0.55, 0.4); sfx.swish(0.8); fovKick = Math.max(fovKick, 6); after(0.35, () => { sfx.warn(); slowmo(0.4, 0.9); }); }
   for (const [t, fn] of v.events) after(t, () => { if (finish && finish.v === v && (!e || enemies.includes(e))) fn(e); });
@@ -1851,6 +1868,7 @@ function updPlayer(dt) {
   if (keys.KeyD) ix += 1;
   if (keys.ArrowLeft) turn += 1;
   if (keys.ArrowRight) turn -= 1;
+  if (AUTO && autoGo) iz -= 1;   // autopilot: close in on the nearest enemy
   if (joy.id !== null) { iz += joy.y; turn -= Math.sign(joy.x) * Math.max(0, Math.abs(joy.x) - 0.15) * 1.2; }
   player.yaw += turn * 2.4 * dt;
   const L = Math.hypot(ix, iz); if (L > 1) { ix /= L; iz /= L; }
@@ -2677,7 +2695,7 @@ function trialFoes() {   // how many, how many at once, and which kinds: grows w
   return { total: TRIAL_FOES, live: Math.min(8, 4 + Math.floor(n / 2)), kinds };
 }
 function trialSpawn() {   // spirits rise round you; bandits come in from the edge of the town
-  const R = trialRun, q = (R.raid ? openSpot(R.town.x, R.town.z, R.town.r, R.town.r + 8) : openSpot(player.pos.x, player.pos.z, 7, 12)) || { x: player.pos.x + rnd(-8, 8), z: player.pos.z + rnd(-8, 8) };
+  const R = trialRun, q = (R.raid && DEV && QS.has('near') ? openSpot(player.pos.x, player.pos.z, 5, 10) : R.raid ? openSpot(R.town.x, R.town.z, R.town.r, R.town.r + 8) : openSpot(player.pos.x, player.pos.z, 7, 12)) || { x: player.pos.x + rnd(-8, 8), z: player.pos.z + rnd(-8, 8) };
   const e = spawnEnemy(pickOne(R.kinds), q.x, q.z, true); e.trial = true; R.spawned++;
   e.root.rotation.y = Math.atan2(player.pos.x - q.x, player.pos.z - q.z);
   fx.dust(new V3(q.x, 0, q.z), 16, 1.2); fx.sparks(new V3(q.x, 1, q.z), 20, 0x8fe8ff, 3);
@@ -3184,15 +3202,16 @@ function drawTrail(now) {
     tctx.strokeStyle = `rgba(176,24,18,${k})`; tctx.lineWidth = 3 * k; tctx.stroke();
   }
 }
-let autoT = 0, frameN = 0;
+let autoT = 0, autoGo = false, frameN = 0;
 function autopilot(dt) {
   const dist = e => Math.hypot(e.x - player.pos.x, e.z - player.pos.z);
   const near = enemies.filter(e => !e.gate).sort((a, b) => dist(a) - dist(b))[0];
   if (near) { const want = Math.atan2(-(near.x - player.pos.x), -(near.z - player.pos.z)); let da = want - player.yaw; da = Math.atan2(Math.sin(da), Math.cos(da)); player.yaw += da * Math.min(1, dt * 5); }
+  const W = WEAP[cur], l = lvl(cur), reach = W.mode === 'throw' || W.mode === 'fling' ? 8 : 2.6;   // melee fights up close, throwers keep some distance
+  autoGo = !!near && dist(near) > reach;
   autoT -= dt; if (autoT > 0) return;
   autoT = 0.3;
-  const W = WEAP[cur], l = lvl(cur);
-  const e = enemies.find(e => dist(e) < (W.range ? W.range(l) : 30));
+  const e = enemies.find(e => dist(e) < (W.range ? W.range(l) : reach + 1.5));
   if (!e) return;
   const s = toScreen(bodyCenter(e)); if (!s || s.x < 0 || s.x > vw) return;
   const a = rnd(0, Math.PI), r = 120;
@@ -3370,7 +3389,7 @@ async function boot() {
   const test = DEV ? QS.get('test') : null;
   if (DEV && QS.get('w') && WEAP[QS.get('w')]) { trial = QS.get('w'); }
   if (test === 'play') startStage(+(QS.get('stage') || 1));
-  if ((test === 'play' || test === 'storm') && QS.get('spawn')) after(0.4, () => QS.get('spawn').split(',').forEach((k, i, all) => { const a = player.yaw + (i - (all.length - 1) / 2) * 0.5; spawnEnemy(k, player.pos.x - Math.sin(a) * 6, player.pos.z - Math.cos(a) * 6); }));   // dev: e.g. &spawn=shogun,brute
+  if ((test === 'play' || test === 'storm') && QS.get('spawn')) after(0.4, () => QS.get('spawn').split(',').forEach((k, i, all) => { const a = player.yaw + (i - (all.length - 1) / 2) * 0.5; const d = +(QS.get('sd') || 6); spawnEnemy(k, player.pos.x - Math.sin(a) * d, player.pos.z - Math.cos(a) * d); }));   // dev: e.g. &spawn=shogun,brute (&sd=distance)
   if (test === 'arsenal') $('arsenalBtn').click();
   if (test === 'chars') { $('charsBtn').click(); if (QS.get('ch')) { chSel = QS.get('ch'); renderChars(); } }   // dev: character screen
   if (DEV && QS.get('dash')) after(+(QS.get('dashAt') || 1), () => { const m = { F: [0, -1], B: [0, 1], L: [-1, 0], R: [1, 0] }[QS.get('dash')], sy = Math.sin(player.yaw), cy = Math.cos(player.yaw); player.moveDir.set(m[0] * cy + m[1] * sy, 0, -m[0] * sy + m[1] * cy); dash(); });   // dev: &dash=F|B|L|R
@@ -3380,6 +3399,7 @@ async function boot() {
     after(0.3, () => { const e = spawnEnemy('grunt', player.pos.x, player.pos.z - 2.8, true); e.state = 'idle'; woundEnemy(e, 'legs', new THREE.Plane(UP.clone(), -0.4), new V3(1, 0, 0)); });
     if (QS.has('air')) after(1.2, jump);   // &air: jump first for an aerial finisher
     if (QS.has('go')) after(1.4, tryFinish);
+    if (QS.has('tsu')) { after(1.3, () => tsubame(1, -0.4)); after(1.45, tryFinish); }   // &air&tsu: aerial M1 straight into a finisher
   }
   if (test === 'explore') { startExplore(QS.get('map') || 'shrine'); if (QS.get('at')) { const [x, z] = QS.get('at').split(',').map(Number); player.pos.set(x, 0, z); } }   // dev: ?test=explore&map=castle&at=x,z
   if (test === 'explore' && QS.get('slash')) for (let k = 0; k < +QS.get('slash'); k++) after(1 + k * 0.5, () => { const f = k % 2 ? -1 : 1, x0 = vw * 0.5 - vw * 0.2 * f, y0 = vh * 0.3, x1 = vw * 0.5 + vw * 0.2 * f, y1 = vh * 0.7; stroke++; sliceSeg([x0, y0, x1, y1], x0, y0, x1, y1, +(QS.get('range') || 6), 1, stroke, 'katana'); });   // dev: &slash=N cuts through the screen centre
